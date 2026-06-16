@@ -53,6 +53,13 @@ function sendCsv(res: express.Response, fileName: string, rows: Record<string, u
   res.send(csv);
 }
 
+function generateOtp() {
+  if (process.env.NODE_ENV !== "production" && process.env.USE_FIXED_DEV_OTP === "true" && process.env.DEV_OTP_CODE) {
+    return process.env.DEV_OTP_CODE;
+  }
+  return crypto.randomInt(100000, 999999).toString();
+}
+
 function text(value: unknown) {
   if (value == null) return "";
   if (value instanceof Date) return value.toISOString();
@@ -118,8 +125,7 @@ app.post("/api/auth/request-otp", asyncRoute(async (req, res) => {
   const recent = await db.otpToken.count({ where: { email, createdAt: { gte: new Date(Date.now() - 15 * 60 * 1000) } } });
   if (recent >= 3) return res.status(429).json({ error: "Too many login codes requested. Please wait 15 minutes." });
 
-  const devOtp = process.env.NODE_ENV !== "production" ? process.env.DEV_OTP_CODE : undefined;
-  const otp = devOtp || crypto.randomInt(100000, 999999).toString();
+  const otp = generateOtp();
   const user = await db.user.upsert({ where: { email }, update: {}, create: { email } });
   await db.otpToken.create({ data: { email, tokenHash: await hashValue(otp), expiresAt: new Date(Date.now() + 10 * 60 * 1000), userId: user.id } });
   if (!(process.env.NODE_ENV !== "production" && process.env.SKIP_OTP_EMAIL_IN_DEV === "true")) await sendOtpEmail(email, otp);
@@ -206,7 +212,7 @@ app.post("/api/profiles/reset/request", asyncRoute(async (req, res) => {
   const profile = await db.profile.findUnique({ where: { id: profileId } });
   if (!profile) return res.status(404).json({ error: "Profile not found." });
   const resetEmail = process.env.PROFILE_RESET_EMAIL ?? "info@onboard-tours.com";
-  const otp = process.env.NODE_ENV !== "production" ? process.env.DEV_OTP_CODE || crypto.randomInt(100000, 999999).toString() : crypto.randomInt(100000, 999999).toString();
+  const otp = generateOtp();
   await db.profilePasswordResetToken.create({ data: { profileId, email: resetEmail, tokenHash: await hashValue(otp), expiresAt: new Date(Date.now() + 10 * 60 * 1000) } });
   if (!(process.env.NODE_ENV !== "production" && process.env.SKIP_OTP_EMAIL_IN_DEV === "true")) await sendProfileResetOtpEmail(resetEmail, profile.name, otp);
   res.json({ ok: true, next: `/profiles/reset?profileId=${encodeURIComponent(profileId)}` });
