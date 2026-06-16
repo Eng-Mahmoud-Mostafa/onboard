@@ -71,13 +71,21 @@ enum ActivityAction {
   CLIENT_CREATED
   LEAD_CREATED
   LEAD_EDITED
+  LEAD_DELETED
   LEAD_CONVERTED
   BOOKING_CREATED
+  BOOKING_EDITED
+  BOOKING_CANCELLED
   PAYMENT_ADDED
   PROFILE_LOGGED_IN
   DATA_EXPORTED
   TASK_COMPLETED
+  TASK_CREATED
+  PACKAGE_CREATED
+  FILE_UPLOADED
   PROFILE_CREATED
+  PROFILE_PASSWORD_RESET
+  DATA_IMPORTED
 }
 
 model User {
@@ -87,6 +95,23 @@ model User {
   updatedAt DateTime   @updatedAt
   profiles  Profile[]
   otpTokens OtpToken[]
+  sessions  Session[]
+
+  @@index([email])
+}
+
+model Session {
+  id                String    @id @default(cuid())
+  token             String    @unique
+  userId            String
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  unlockedProfileId String?
+  expiresAt         DateTime
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([token])
+  @@index([userId])
 }
 
 model Profile {
@@ -103,8 +128,27 @@ model Profile {
   tasks          Task[]
   payments       Payment[]
   activityLogs   ActivityLog[]
+  resetTokens    ProfilePasswordResetToken[]
+  clients        Client[]
+  uploadedFiles  UploadedFile[]
 
   @@unique([name])
+  @@index([name])
+  @@index([isAdmin])
+}
+
+model ProfilePasswordResetToken {
+  id           String    @id @default(cuid())
+  profileId    String
+  profile      Profile   @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  email        String
+  tokenHash    String
+  expiresAt    DateTime
+  consumedAt   DateTime?
+  attemptCount Int       @default(0)
+  createdAt    DateTime  @default(now())
+
+  @@index([profileId, email, createdAt])
 }
 
 model OtpToken {
@@ -129,20 +173,29 @@ model Lead {
   email              String?
   source             LeadSource
   interestedPackage  String
+  interestedDestination String?
   budget             Decimal?    @db.Decimal(12, 2)
   travelDate         DateTime?
   travelers          Int
+  travelersCount     Int?
   status             LeadStatus  @default(NEW)
   notes              String?
   assignedProfileId  String?
   assignedProfile    Profile?    @relation(fields: [assignedProfileId], references: [id], onDelete: SetNull)
   clientId           String?
   client             Client?     @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  convertedClientId  String?
+  convertedBookingId String?
   booking            Booking?
   tasks              Task[]
   activityLogs       ActivityLog[]
   createdAt          DateTime    @default(now())
   updatedAt          DateTime    @updatedAt
+
+  @@index([status])
+  @@index([source])
+  @@index([assignedProfileId])
+  @@index([createdAt])
 }
 
 model Client {
@@ -153,12 +206,20 @@ model Client {
   nationality    String?
   passportNumber String?
   notes          String?
+  assignedProfileId String?
+  assignedProfile   Profile?   @relation(fields: [assignedProfileId], references: [id], onDelete: SetNull)
   leads          Lead[]
   bookings       Booking[]
   tasks          Task[]
   activityLogs   ActivityLog[]
+  uploadedFiles  UploadedFile[]
   createdAt      DateTime   @default(now())
   updatedAt      DateTime   @updatedAt
+
+  @@index([phone])
+  @@index([email])
+  @@index([assignedProfileId])
+  @@index([createdAt])
 }
 
 model Package {
@@ -176,6 +237,9 @@ model Package {
   bookings         Booking[]
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
+
+  @@index([status])
+  @@index([destination])
 }
 
 model Booking {
@@ -183,8 +247,9 @@ model Booking {
   bookingCode       String         @unique
   clientId          String
   client            Client         @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  packageId         String
-  package           Package        @relation(fields: [packageId], references: [id], onDelete: Restrict)
+  packageId         String?
+  package           Package?       @relation(fields: [packageId], references: [id], onDelete: SetNull)
+  packageNameSnapshot String?
   leadId            String?        @unique
   lead              Lead?          @relation(fields: [leadId], references: [id], onDelete: SetNull)
   travelDate        DateTime
@@ -200,14 +265,22 @@ model Booking {
   payments          Payment[]
   tasks             Task[]
   activityLogs      ActivityLog[]
+  uploadedFiles     UploadedFile[]
   createdAt         DateTime       @default(now())
   updatedAt         DateTime       @updatedAt
+
+  @@index([bookingStatus])
+  @@index([paymentStatus])
+  @@index([assignedProfileId])
+  @@index([travelDate])
+  @@index([createdAt])
 }
 
 model Payment {
   id               String        @id @default(cuid())
   bookingId        String
   booking          Booking       @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  clientId         String?
   clientName       String
   amountPaid       Decimal       @db.Decimal(12, 2)
   paymentMethod    PaymentMethod
@@ -217,6 +290,9 @@ model Payment {
   recordedBy       Profile?      @relation(fields: [recordedById], references: [id], onDelete: SetNull)
   activityLogs     ActivityLog[]
   createdAt        DateTime      @default(now())
+
+  @@index([recordedById])
+  @@index([paymentDate])
 }
 
 model Task {
@@ -224,6 +300,7 @@ model Task {
   title             String
   description       String?
   dueAt             DateTime
+  dueDate           DateTime?
   priority          TaskPriority @default(MEDIUM)
   status            TaskStatus   @default(PENDING)
   assignedProfileId String?
@@ -237,6 +314,11 @@ model Task {
   activityLogs      ActivityLog[]
   createdAt         DateTime     @default(now())
   updatedAt         DateTime     @updatedAt
+
+  @@index([dueAt])
+  @@index([dueDate])
+  @@index([status])
+  @@index([assignedProfileId])
 }
 
 model ActivityLog {
@@ -257,4 +339,28 @@ model ActivityLog {
   taskId    String?
   task      Task?          @relation(fields: [taskId], references: [id], onDelete: SetNull)
   createdAt DateTime       @default(now())
+
+  @@index([profileId])
+  @@index([message])
+  @@index([createdAt])
+}
+
+model UploadedFile {
+  id                  String    @id @default(cuid())
+  fileName            String
+  fileUrl             String
+  fileType            String
+  fileSize            Int
+  relatedBookingId    String?
+  relatedBooking      Booking?  @relation(fields: [relatedBookingId], references: [id], onDelete: SetNull)
+  relatedClientId     String?
+  relatedClient       Client?   @relation(fields: [relatedClientId], references: [id], onDelete: SetNull)
+  uploadedByProfileId String?
+  uploadedByProfile   Profile?  @relation(fields: [uploadedByProfileId], references: [id], onDelete: SetNull)
+  createdAt           DateTime  @default(now())
+
+  @@index([relatedBookingId])
+  @@index([relatedClientId])
+  @@index([uploadedByProfileId])
+  @@index([createdAt])
 }
