@@ -1,5 +1,5 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
-import { Link, Navigate, Route, Routes, useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { BarChart3, CalendarCheck, CircleDollarSign, ClipboardList, History, LayoutDashboard, LogOut, Mail, PackageOpen, Plane, Search, Settings, ShieldCheck, Upload, Users } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { api, AuthState, postJson } from "./api";
@@ -15,6 +15,14 @@ type Dashboard = {
   isAdmin: boolean;
 };
 type ResourceResponse = { rows: Record<string, unknown>[]; total: number; page: number; pageCount: number };
+type DetailResponse = {
+  title: string;
+  subtitle: string;
+  status: string;
+  fields: [string, string | number][];
+  related: Record<string, { title: string; meta: string }[]>;
+  activity: { message: string; profile: string; date: string }[];
+};
 
 const nav = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, group: "Main" },
@@ -176,11 +184,17 @@ function Shell({ auth, refreshAuth }: { auth: AuthState; refreshAuth: () => Prom
           <Routes>
             <Route path="/dashboard" element={<DashboardPage />} />
             <Route path="/leads" element={<ResourcePage resource="leads" />} />
+            <Route path="/leads/:id" element={<DetailPage resource="leads" />} />
             <Route path="/clients" element={<ResourcePage resource="clients" />} />
+            <Route path="/clients/:id" element={<DetailPage resource="clients" />} />
             <Route path="/packages" element={<ResourcePage resource="packages" />} />
+            <Route path="/packages/:id" element={<DetailPage resource="packages" />} />
             <Route path="/bookings" element={<ResourcePage resource="bookings" />} />
+            <Route path="/bookings/:id" element={<DetailPage resource="bookings" />} />
             <Route path="/payments" element={<ResourcePage resource="payments" />} />
+            <Route path="/payments/:id" element={<DetailPage resource="payments" />} />
             <Route path="/tasks" element={<ResourcePage resource="tasks" />} />
+            <Route path="/tasks/:id" element={<DetailPage resource="tasks" />} />
             <Route path="/activity" element={<ResourcePage resource="activity" />} />
             <Route path="/reports" element={<ReportsPage />} />
             <Route path="/import-export" element={<ImportExportPage />} />
@@ -216,6 +230,7 @@ function DashboardPage() {
 
 function ResourcePage({ resource }: { resource: keyof typeof resourceConfig }) {
   const config = resourceConfig[resource];
+  const navigate = useNavigate();
   const [q, setQ] = useState("");
   const [refresh, setRefresh] = useState(0);
   const [editing, setEditing] = useState<Record<string, unknown> | null>(null);
@@ -228,7 +243,7 @@ function ResourcePage({ resource }: { resource: keyof typeof resourceConfig }) {
     <>
       <PageHeader title={config.title} description={config.description} action={canCreate ? <CreateDrawer resource={resource} onDone={() => setRefresh((x) => x + 1)} /> : undefined} />
       <div className="toolbar"><input value={q} onChange={(event) => setQ(event.target.value)} placeholder="Search..." />{resource === "leads" || resource === "tasks" ? <ImportExcel type={resource} onDone={() => setRefresh((x) => x + 1)} /> : null}</div>
-      {rows && !isLoading ? <><DataTable headers={canEdit ? [...config.headers, "Actions"] : config.headers} labels={config.labels} rows={rows.rows} onEdit={canEdit ? setEditing : undefined} /><PaginationMeta rows={rows} /></> : <Loading />}
+      {rows && !isLoading ? <><DataTable headers={canEdit ? [...config.headers, "Actions"] : config.headers} labels={config.labels} rows={rows.rows} onEdit={canEdit ? setEditing : undefined} onOpen={(row) => row.id && navigate(`/${resource}/${row.id}`)} /><PaginationMeta rows={rows} /></> : <Loading />}
       {editing && <RecordForm resource={resource} initial={editing} onClose={() => setEditing(null)} onDone={() => setRefresh((x) => x + 1)} />}
     </>
   );
@@ -251,8 +266,8 @@ function ErrorState({ error }: { error: unknown }) {
   return <div className="error">{error instanceof Error ? error.message : "Something went wrong."}</div>;
 }
 
-function DataTable({ headers, labels, rows, onEdit }: { headers: readonly string[]; labels: readonly string[]; rows: Record<string, unknown>[]; onEdit?: (row: Record<string, unknown>) => void }) {
-  return <div className="table-wrap"><table><thead><tr>{headers.map((header) => <th key={header}>{header}</th>)}</tr></thead><tbody>{rows.map((row, index) => <tr key={index}>{labels.map((label) => <td key={label}>{renderCell(label, row[label])}</td>)}{onEdit && <td><button className="table-action" type="button" onClick={(event) => { event.stopPropagation(); onEdit(row); }}>Edit</button></td>}</tr>)}</tbody></table>{!rows.length && <p className="empty">No records yet.</p>}</div>;
+function DataTable({ headers, labels, rows, onEdit, onOpen }: { headers: readonly string[]; labels: readonly string[]; rows: Record<string, unknown>[]; onEdit?: (row: Record<string, unknown>) => void; onOpen?: (row: Record<string, unknown>) => void }) {
+  return <div className="table-wrap"><table><thead><tr>{headers.map((header) => <th key={header}>{header}</th>)}</tr></thead><tbody>{rows.map((row, index) => <tr key={index} onClick={() => onOpen?.(row)}>{labels.map((label) => <td key={label}>{renderCell(label, row[label])}</td>)}{onEdit && <td><button className="table-action" type="button" onClick={(event) => { event.stopPropagation(); onEdit(row); }}>Edit</button></td>}</tr>)}</tbody></table>{!rows.length && <p className="empty">No records yet.</p>}</div>;
 }
 
 function renderCell(label: string, value: unknown) {
@@ -438,6 +453,44 @@ function ResetProfile() {
 function ReportsPage() {
   const { data } = useQuery({ queryKey: ["reports-summary"], queryFn: () => api<{ leads: number; bookings: number; revenue: number }>("/api/reports/summary") });
   return <><PageHeader title="Reports" description="Admin reporting for revenue, conversion, bookings, and follow-up performance." /><section className="stats compact"><div className="stat"><span>Total leads</span><b>{data?.leads ?? "-"}</b><small>All profiles</small></div><div className="stat"><span>Bookings</span><b>{data?.bookings ?? "-"}</b><small>All trips</small></div><div className="stat"><span>Revenue</span><b>{data ? `$${data.revenue.toLocaleString()}` : "-"}</b><small>Recorded payments</small></div></section><div className="card">Detailed report endpoints are available for leads by source, revenue by profile, package bookings, and follow-up completion.</div></>;
+}
+
+function DetailPage({ resource }: { resource: string }) {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const { data, isLoading, error } = useQuery({ queryKey: ["detail", resource, id], queryFn: () => api<DetailResponse>(`/api/${resource}/${id}`), enabled: Boolean(id) });
+  if (error) return <ErrorState error={error} />;
+  if (isLoading || !data) return <Loading />;
+  const relatedEntries = Object.entries(data.related).filter(([, items]) => items.length);
+  return (
+    <>
+      <div className="detail-hero">
+        <button className="ghost" onClick={() => navigate(`/${resource}`)}>Back</button>
+        <div>
+          <div className="page-title">{data.title}</div>
+          <div className="page-sub">{data.subtitle}</div>
+        </div>
+        <span className={`chip ${chipClass(data.status)}`}>{data.status}</span>
+      </div>
+      <section className="detail-grid">
+        <div className="card detail-card">
+          <div className="card-header"><div className="card-title">Details</div></div>
+          <div className="detail-fields">{data.fields.map(([label, value]) => <div className="detail-field" key={label}><span>{label}</span><b>{String(value ?? "-")}</b></div>)}</div>
+        </div>
+        <div className="card detail-card">
+          <div className="card-header"><div className="card-title">Recent activity</div></div>
+          {data.activity.length ? data.activity.map((item, index) => <div className="mini-row active" key={index}><b>{item.message}</b><span>{item.profile} - {item.date}</span></div>) : <p className="empty">No activity yet.</p>}
+        </div>
+      </section>
+      <section className="detail-related">
+        {relatedEntries.map(([name, items]) => <div className="card detail-card" key={name}><div className="card-header"><div className="card-title">{titleCase(name)}</div></div>{items.map((item, index) => <div className="mini-row" key={index}><b>{item.title}</b><span>{item.meta}</span></div>)}</div>)}
+      </section>
+    </>
+  );
+}
+
+function titleCase(value: string) {
+  return value.replace(/(^|\s)\w/g, (match) => match.toUpperCase());
 }
 
 function ImportExportPage() {

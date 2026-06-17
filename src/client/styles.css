@@ -602,6 +602,78 @@ nav {
   margin-top: 14px;
 }
 
+.detail-hero {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.detail-hero > div {
+  flex: 1;
+}
+
+.detail-grid,
+.detail-related {
+  display: grid;
+  gap: 14px;
+}
+
+.detail-grid {
+  grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.75fr);
+  margin-bottom: 14px;
+}
+
+.detail-related {
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.detail-card {
+  align-self: start;
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.detail-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.detail-field {
+  min-height: 68px;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(39, 39, 42, 0.45);
+}
+
+.detail-field:nth-child(odd) {
+  border-right: 1px solid rgba(39, 39, 42, 0.45);
+}
+
+.detail-field span {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--text3);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.detail-field b {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .mini-row {
   padding: 10px 16px;
   border-bottom: 1px solid rgba(39, 39, 42, 0.45);
@@ -1075,8 +1147,22 @@ tbody tr:last-child td {
   .stats,
   .stats.compact,
   .two-col,
+  .detail-grid,
   .import-grid,
   .result-grid {
     grid-template-columns: 1fr;
+  }
+
+  .detail-hero {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .detail-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .detail-field:nth-child(odd) {
+    border-right: 0;
   }
 }

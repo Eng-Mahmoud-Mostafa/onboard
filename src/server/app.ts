@@ -386,6 +386,70 @@ app.post("/api/crm/:resource", asyncRoute(async (req, res) => {
   res.json({ ok: true });
 }));
 
+app.get("/api/crm/:resource/:id", asyncRoute(async (req, res) => {
+  const { profile } = await requireProfile(req);
+  const db = getPrisma();
+  const resource = req.params.resource;
+  const id = String(req.params.id);
+  const activityWhere = { OR: [{ leadId: id }, { clientId: id }, { bookingId: id }, { paymentId: id }, { taskId: id }] };
+
+  if (resource === "leads") {
+    const lead = await db.lead.findUnique({ where: { id }, include: { assignedProfile: true, tasks: true, activityLogs: { include: { profile: true }, orderBy: { createdAt: "desc" }, take: 8 } } });
+    if (!lead) return res.status(404).json({ error: "Lead not found." });
+    if (!profile.isAdmin && lead.assignedProfileId && lead.assignedProfileId !== profile.profileId) return res.status(403).json({ error: "Forbidden" });
+    return res.json({ title: lead.clientName, subtitle: lead.phone, status: enumLabel(lead.status), fields: [
+      ["Email", lead.email || "-"], ["Source", enumLabel(lead.source)], ["Destination", lead.interestedDestination || "-"], ["Package", lead.interestedPackage], ["Budget", lead.budget ? money(lead.budget.toString()) : "-"], ["Travel date", shortDate(lead.travelDate)], ["Travelers", lead.travelers], ["Assigned profile", lead.assignedProfile?.name ?? "Unassigned"], ["Notes", lead.notes || "-"],
+    ], related: { tasks: lead.tasks.map((task) => ({ title: task.title, meta: `${enumLabel(task.status)} - ${shortDate(task.dueAt)}` })) }, activity: lead.activityLogs.map((item) => ({ message: item.message, profile: item.profile?.name ?? "-", date: shortDate(item.createdAt) })) });
+  }
+
+  if (resource === "clients") {
+    const client = await db.client.findUnique({ where: { id }, include: { assignedProfile: true, bookings: { include: { package: true } }, tasks: true, uploadedFiles: true, activityLogs: { include: { profile: true }, orderBy: { createdAt: "desc" }, take: 8 } } });
+    if (!client) return res.status(404).json({ error: "Client not found." });
+    if (!profile.isAdmin && client.assignedProfileId && client.assignedProfileId !== profile.profileId) return res.status(403).json({ error: "Forbidden" });
+    return res.json({ title: client.fullName, subtitle: client.phone, status: client.assignedProfile?.name ?? "Unassigned", fields: [
+      ["Email", client.email || "-"], ["Nationality", client.nationality || "-"], ["Passport", client.passportNumber || "-"], ["Bookings", client.bookings.length], ["Paid", money(client.bookings.reduce((sum, booking) => sum + Number(booking.paidAmount), 0))], ["Remaining", money(client.bookings.reduce((sum, booking) => sum + Number(booking.remainingAmount), 0))], ["Notes", client.notes || "-"],
+    ], related: { bookings: client.bookings.map((booking) => ({ title: booking.bookingCode, meta: `${booking.package?.name ?? booking.packageNameSnapshot ?? "Custom trip"} - ${enumLabel(booking.bookingStatus)}` })), tasks: client.tasks.map((task) => ({ title: task.title, meta: `${enumLabel(task.status)} - ${shortDate(task.dueAt)}` })), files: client.uploadedFiles.map((file) => ({ title: file.fileName, meta: `${Math.round(file.fileSize / 1024)} KB` })) }, activity: client.activityLogs.map((item) => ({ message: item.message, profile: item.profile?.name ?? "-", date: shortDate(item.createdAt) })) });
+  }
+
+  if (resource === "packages") {
+    const item = await db.package.findUnique({ where: { id }, include: { bookings: { include: { client: true } } } });
+    if (!item) return res.status(404).json({ error: "Package not found." });
+    return res.json({ title: item.name, subtitle: item.destination, status: enumLabel(item.status), fields: [
+      ["Duration", item.duration], ["Price", money(item.price.toString())], ["Capacity", item.capacity], ["Included", item.includedServices], ["Excluded", item.excludedServices], ["Description", item.description],
+    ], related: { bookings: item.bookings.map((booking) => ({ title: booking.bookingCode, meta: `${booking.client.fullName} - ${enumLabel(booking.bookingStatus)}` })) }, activity: [] });
+  }
+
+  if (resource === "bookings") {
+    const booking = await db.booking.findUnique({ where: { id }, include: { client: true, package: true, assignedProfile: true, payments: true, tasks: true, uploadedFiles: true, activityLogs: { include: { profile: true }, orderBy: { createdAt: "desc" }, take: 8 } } });
+    if (!booking) return res.status(404).json({ error: "Booking not found." });
+    if (!profile.isAdmin && booking.assignedProfileId && booking.assignedProfileId !== profile.profileId) return res.status(403).json({ error: "Forbidden" });
+    return res.json({ title: booking.bookingCode, subtitle: booking.client.fullName, status: enumLabel(booking.bookingStatus), fields: [
+      ["Package", booking.package?.name ?? booking.packageNameSnapshot ?? "Custom trip"], ["Travel date", shortDate(booking.travelDate)], ["Travelers", booking.travelers], ["Total", money(booking.totalPrice.toString())], ["Paid", money(booking.paidAmount.toString())], ["Remaining", money(booking.remainingAmount.toString())], ["Payment status", enumLabel(booking.paymentStatus)], ["Assigned profile", booking.assignedProfile?.name ?? "Unassigned"], ["Notes", booking.notes || "-"],
+    ], related: { payments: booking.payments.map((payment) => ({ title: money(payment.amountPaid.toString()), meta: `${enumLabel(payment.paymentMethod)} - ${shortDate(payment.paymentDate)}` })), tasks: booking.tasks.map((task) => ({ title: task.title, meta: `${enumLabel(task.status)} - ${shortDate(task.dueAt)}` })), files: booking.uploadedFiles.map((file) => ({ title: file.fileName, meta: `${Math.round(file.fileSize / 1024)} KB` })) }, activity: booking.activityLogs.map((item) => ({ message: item.message, profile: item.profile?.name ?? "-", date: shortDate(item.createdAt) })) });
+  }
+
+  if (resource === "payments") {
+    const payment = await db.payment.findUnique({ where: { id }, include: { booking: { include: { client: true } }, recordedBy: true, activityLogs: { include: { profile: true }, orderBy: { createdAt: "desc" }, take: 8 } } });
+    if (!payment) return res.status(404).json({ error: "Payment not found." });
+    if (!profile.isAdmin && payment.recordedById && payment.recordedById !== profile.profileId) return res.status(403).json({ error: "Forbidden" });
+    return res.json({ title: money(payment.amountPaid.toString()), subtitle: payment.booking.bookingCode, status: enumLabel(payment.paymentMethod), fields: [
+      ["Client", payment.booking.client.fullName], ["Payment date", shortDate(payment.paymentDate)], ["Recorded by", payment.recordedBy?.name ?? "-"], ["Notes", payment.notes || "-"],
+    ], related: {}, activity: payment.activityLogs.map((item) => ({ message: item.message, profile: item.profile?.name ?? "-", date: shortDate(item.createdAt) })) });
+  }
+
+  if (resource === "tasks") {
+    const task = await db.task.findUnique({ where: { id }, include: { assignedProfile: true, lead: true, client: true, booking: true, activityLogs: { include: { profile: true }, orderBy: { createdAt: "desc" }, take: 8 } } });
+    if (!task) return res.status(404).json({ error: "Task not found." });
+    if (!profile.isAdmin && task.assignedProfileId && task.assignedProfileId !== profile.profileId) return res.status(403).json({ error: "Forbidden" });
+    return res.json({ title: task.title, subtitle: shortDate(task.dueAt), status: enumLabel(task.status), fields: [
+      ["Priority", enumLabel(task.priority)], ["Assigned profile", task.assignedProfile?.name ?? "Unassigned"], ["Description", task.description || "-"], ["Lead", task.lead?.clientName ?? "-"], ["Client", task.client?.fullName ?? "-"], ["Booking", task.booking?.bookingCode ?? "-"],
+    ], related: {}, activity: task.activityLogs.map((item) => ({ message: item.message, profile: item.profile?.name ?? "-", date: shortDate(item.createdAt) })) });
+  }
+
+  const activity = await db.activityLog.findMany({ where: activityWhere, include: { profile: true }, orderBy: { createdAt: "desc" }, take: 8 });
+  res.json({ title: "Record", subtitle: id, status: resource, fields: [["ID", id]], related: {}, activity: activity.map((item) => ({ message: item.message, profile: item.profile?.name ?? "-", date: shortDate(item.createdAt) })) });
+}));
+
 app.patch("/api/crm/:resource/:id", asyncRoute(async (req, res) => {
   const { profile } = await requireProfile(req);
   const db = getPrisma();
@@ -561,6 +625,7 @@ app.patch("/api/crm/:resource/:id", asyncRoute(async (req, res) => {
 for (const resource of ["dashboard", "leads", "clients", "packages", "bookings", "payments", "tasks", "activity"] as const) {
   app.get(`/api/${resource}`, (req, res) => res.redirect(307, `/api/crm/${resource}${req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : ""}`));
   if (resource !== "dashboard" && resource !== "activity") {
+    app.get(`/api/${resource}/:id`, (req, res) => res.redirect(307, `/api/crm/${resource}/${req.params.id}`));
     app.post(`/api/${resource}`, (_req, res) => res.redirect(307, `/api/crm/${resource}`));
     app.patch(`/api/${resource}/:id`, (req, res) => res.redirect(307, `/api/crm/${resource}/${req.params.id}`));
   }
