@@ -222,7 +222,7 @@ function ResourcePage({ resource }: { resource: keyof typeof resourceConfig }) {
   const debounced = useDebouncedValue(q, 350);
   const { data: rows, isLoading, error } = useQuery({ queryKey: [resource, debounced, refresh], queryFn: () => api<ResourceResponse>(`/api/${resource}?q=${encodeURIComponent(debounced)}`) });
   const canCreate = resource !== "activity";
-  const canEdit = resource === "clients" || resource === "packages";
+  const canEdit = resource !== "activity";
   if (error) return <ErrorState error={error} />;
   return (
     <>
@@ -346,9 +346,32 @@ function formFields(resource: string, lookups: Lookup | null): FieldConfig[] {
     { name: "capacity", label: "Capacity", type: "number", required: true },
     { name: "status", label: "Status", required: true, options: ["ACTIVE", "DRAFT", "ARCHIVED"].map((x) => ({ value: x, label: x })) },
   ];
-  if (resource === "tasks") return [{ name: "title", label: "Task title" }, { name: "description", label: "Description" }, { name: "dueAt", label: "Due date", type: "datetime-local" }, { name: "priority", label: "Priority", options: ["LOW", "MEDIUM", "HIGH"].map((x) => ({ value: x, label: x })) }, { name: "assignedProfileId", label: "Assigned profile", options: profileOptions }];
-  if (resource === "bookings") return [{ name: "clientId", label: "Client", options: (lookups?.clients ?? []).map((x) => ({ value: x.id, label: x.fullName })) }, { name: "packageId", label: "Package", options: (lookups?.packages ?? []).map((x) => ({ value: x.id, label: x.name })) }, { name: "travelDate", label: "Travel date", type: "date" }, { name: "travelers", label: "Travelers", type: "number" }, { name: "totalPrice", label: "Total price", type: "number" }, { name: "paidAmount", label: "Paid amount", type: "number" }, { name: "bookingStatus", label: "Status", options: ["PENDING", "CONFIRMED", "CANCELLED", "COMPLETED"].map((x) => ({ value: x, label: x })) }, { name: "assignedProfileId", label: "Assigned profile", options: profileOptions }];
-  if (resource === "payments") return [{ name: "bookingId", label: "Booking", options: (lookups?.bookings ?? []).map((x) => ({ value: x.id, label: x.bookingCode })) }, { name: "amountPaid", label: "Amount", type: "number" }, { name: "paymentMethod", label: "Method", options: ["CASH", "BANK_TRANSFER", "INSTAPAY", "VODAFONE_CASH", "CARD", "OTHER"].map((x) => ({ value: x, label: x })) }, { name: "paymentDate", label: "Date", type: "date" }];
+  if (resource === "tasks") return [
+    { name: "title", label: "Task title", required: true },
+    { name: "description", label: "Description", placeholder: "Optional" },
+    { name: "dueAt", label: "Due date", type: "datetime-local", required: true },
+    { name: "priority", label: "Priority", required: true, options: ["LOW", "MEDIUM", "HIGH"].map((x) => ({ value: x, label: x })) },
+    { name: "status", label: "Status", required: true, options: ["PENDING", "DONE", "MISSED"].map((x) => ({ value: x, label: x })) },
+    { name: "assignedProfileId", label: "Assigned profile", options: profileOptions },
+  ];
+  if (resource === "bookings") return [
+    { name: "clientId", label: "Client", required: true, options: (lookups?.clients ?? []).map((x) => ({ value: x.id, label: x.fullName })) },
+    { name: "packageId", label: "Package", options: (lookups?.packages ?? []).map((x) => ({ value: x.id, label: x.name })) },
+    { name: "travelDate", label: "Travel date", type: "date", required: true },
+    { name: "travelers", label: "Travelers", type: "number", required: true },
+    { name: "totalPrice", label: "Total price", type: "number", required: true },
+    { name: "paidAmount", label: "Paid amount", type: "number", defaultValue: 0 },
+    { name: "bookingStatus", label: "Status", required: true, options: ["PENDING", "CONFIRMED", "CANCELLED", "COMPLETED"].map((x) => ({ value: x, label: x })) },
+    { name: "assignedProfileId", label: "Assigned profile", options: profileOptions },
+    { name: "notes", label: "Notes", placeholder: "Optional" },
+  ];
+  if (resource === "payments") return [
+    { name: "bookingId", label: "Booking", required: true, options: (lookups?.bookings ?? []).map((x) => ({ value: x.id, label: x.bookingCode })) },
+    { name: "amountPaid", label: "Amount", type: "number", required: true },
+    { name: "paymentMethod", label: "Method", required: true, options: ["CASH", "BANK_TRANSFER", "INSTAPAY", "VODAFONE_CASH", "CARD", "OTHER"].map((x) => ({ value: x, label: x })) },
+    { name: "paymentDate", label: "Date", type: "date", required: true },
+    { name: "notes", label: "Notes", placeholder: "Optional" },
+  ];
   return [];
 }
 

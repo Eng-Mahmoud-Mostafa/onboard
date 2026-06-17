@@ -52,11 +52,12 @@ export const taskSchema = z.object({
   description: z.string().optional(),
   dueAt: z.string().min(1),
   priority: z.enum(["LOW", "MEDIUM", "HIGH"]).default("MEDIUM"),
+  status: z.enum(["PENDING", "DONE", "MISSED"]).default("PENDING"),
   assignedProfileId: z.string().optional(),
 });
 export const bookingSchema = z.object({
   clientId: z.string().min(1),
-  packageId: z.string().min(1),
+  packageId: optionalText,
   travelDate: z.string().min(1),
   travelers: z.coerce.number().int().positive(),
   totalPrice: z.coerce.number().nonnegative(),

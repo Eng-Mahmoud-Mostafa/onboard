@@ -288,7 +288,7 @@ app.get("/api/crm/:resource", asyncRoute(async (req, res) => {
   if (resource === "leads") {
     const where = { ...assignedFilter(current.profile), ...(q ? { OR: [{ clientName: { contains: q, mode: "insensitive" as const } }, { phone: { contains: q } }, { email: { contains: q, mode: "insensitive" as const } }] } : {}) };
     const [rows, total] = await Promise.all([db.lead.findMany({ where, include: { assignedProfile: true }, orderBy: { updatedAt: "desc" }, skip, take: pageSize }), db.lead.count({ where })]);
-    return paged(res, rows.map((lead) => ({ client: lead.clientName, phone: lead.phone, source: enumLabel(lead.source), status: enumLabel(lead.status), profile: lead.assignedProfile?.name ?? "Unassigned", travel: shortDate(lead.travelDate), updated: shortDate(lead.updatedAt) })), total, page, pageSize);
+    return paged(res, rows.map((lead) => ({ id: lead.id, clientName: lead.clientName, client: lead.clientName, phone: lead.phone, email: lead.email ?? "", source: lead.source, interestedDestination: lead.interestedDestination ?? "", interestedPackage: lead.interestedPackage, budget: lead.budget?.toString() ?? "", travelDate: lead.travelDate ? lead.travelDate.toISOString().slice(0, 10) : "", travelers: lead.travelers, status: lead.status, assignedProfileId: lead.assignedProfileId ?? "", notes: lead.notes ?? "", profile: lead.assignedProfile?.name ?? "Unassigned", travel: shortDate(lead.travelDate), updated: shortDate(lead.updatedAt) })), total, page, pageSize);
   }
 
   if (resource === "clients") {
@@ -306,19 +306,19 @@ app.get("/api/crm/:resource", asyncRoute(async (req, res) => {
   if (resource === "bookings") {
     const where = { ...assignedFilter(current.profile), ...(q ? { OR: [{ bookingCode: { contains: q, mode: "insensitive" as const } }, { client: { fullName: { contains: q, mode: "insensitive" as const } } }, { package: { name: { contains: q, mode: "insensitive" as const } } }] } : {}) };
     const [rows, total] = await Promise.all([db.booking.findMany({ where, include: { client: true, package: true, assignedProfile: true }, orderBy: { createdAt: "desc" }, skip, take: pageSize }), db.booking.count({ where })]);
-    return paged(res, rows.map((booking) => ({ code: booking.bookingCode, client: booking.client.fullName, package: booking.package?.name ?? booking.packageNameSnapshot ?? "Custom trip", travel: shortDate(booking.travelDate), total: money(booking.totalPrice.toString()), paid: money(booking.paidAmount.toString()), remaining: money(booking.remainingAmount.toString()), status: enumLabel(booking.bookingStatus), profile: booking.assignedProfile?.name ?? "Unassigned" })), total, page, pageSize);
+    return paged(res, rows.map((booking) => ({ id: booking.id, code: booking.bookingCode, clientId: booking.clientId, client: booking.client.fullName, packageId: booking.packageId ?? "", package: booking.package?.name ?? booking.packageNameSnapshot ?? "Custom trip", travelDate: booking.travelDate.toISOString().slice(0, 10), travel: shortDate(booking.travelDate), travelers: booking.travelers, totalPrice: booking.totalPrice.toString(), paidAmount: booking.paidAmount.toString(), total: money(booking.totalPrice.toString()), paid: money(booking.paidAmount.toString()), remaining: money(booking.remainingAmount.toString()), bookingStatus: booking.bookingStatus, status: enumLabel(booking.bookingStatus), assignedProfileId: booking.assignedProfileId ?? "", profile: booking.assignedProfile?.name ?? "Unassigned", notes: booking.notes ?? "" })), total, page, pageSize);
   }
 
   if (resource === "payments") {
     const where = { ...recordedFilter(current.profile), ...(q ? { OR: [{ clientName: { contains: q, mode: "insensitive" as const } }, { booking: { bookingCode: { contains: q, mode: "insensitive" as const } } }] } : {}) };
     const [rows, total] = await Promise.all([db.payment.findMany({ where, include: { booking: true, recordedBy: true }, orderBy: { paymentDate: "desc" }, skip, take: pageSize }), db.payment.count({ where })]);
-    return paged(res, rows.map((payment) => ({ booking: payment.booking.bookingCode, client: payment.clientName, amount: money(payment.amountPaid.toString()), method: enumLabel(payment.paymentMethod), date: shortDate(payment.paymentDate), profile: payment.recordedBy?.name ?? "-" })), total, page, pageSize);
+    return paged(res, rows.map((payment) => ({ id: payment.id, bookingId: payment.bookingId, booking: payment.booking.bookingCode, client: payment.clientName, amountPaid: payment.amountPaid.toString(), amount: money(payment.amountPaid.toString()), paymentMethod: payment.paymentMethod, method: enumLabel(payment.paymentMethod), paymentDate: payment.paymentDate.toISOString().slice(0, 10), date: shortDate(payment.paymentDate), notes: payment.notes ?? "", profile: payment.recordedBy?.name ?? "-" })), total, page, pageSize);
   }
 
   if (resource === "tasks") {
     const where = { ...assignedFilter(current.profile), ...(q ? { OR: [{ title: { contains: q, mode: "insensitive" as const } }, { description: { contains: q, mode: "insensitive" as const } }] } : {}) };
     const [rows, total] = await Promise.all([db.task.findMany({ where, include: { assignedProfile: true }, orderBy: { dueAt: "asc" }, skip, take: pageSize }), db.task.count({ where })]);
-    return paged(res, rows.map((task) => ({ id: task.id, task: task.title, due: shortDate(task.dueAt), priority: enumLabel(task.priority), status: enumLabel(task.status), profile: task.assignedProfile?.name ?? "Unassigned" })), total, page, pageSize);
+    return paged(res, rows.map((task) => ({ id: task.id, title: task.title, task: task.title, description: task.description ?? "", dueAt: task.dueAt.toISOString().slice(0, 16), due: shortDate(task.dueAt), priority: task.priority, status: task.status, assignedProfileId: task.assignedProfileId ?? "", profile: task.assignedProfile?.name ?? "Unassigned" })), total, page, pageSize);
   }
 
   if (resource === "activity") {
@@ -356,7 +356,7 @@ app.post("/api/crm/:resource", asyncRoute(async (req, res) => {
     if (!parsed.success) return res.status(400).json({ error: "Check the task fields and try again." });
     const input = clean(parsed.data);
     const dueAt = new Date(input.dueAt);
-    const task = await db.task.create({ data: { title: input.title, description: input.description || null, dueAt, dueDate: dueAt, priority: input.priority, assignedProfileId: input.assignedProfileId || profile.profileId } });
+    const task = await db.task.create({ data: { title: input.title, description: input.description || null, dueAt, dueDate: dueAt, priority: input.priority, status: input.status, assignedProfileId: input.assignedProfileId || profile.profileId } });
     await db.activityLog.create({ data: { action: "TASK_CREATED", message: `Task created: ${task.title}`, profileId: profile.profileId, taskId: task.id } });
   } else if (resource === "bookings") {
     const parsed = bookingSchema.safeParse(req.body);
@@ -365,8 +365,8 @@ app.post("/api/crm/:resource", asyncRoute(async (req, res) => {
     const paid = Number(input.paidAmount ?? 0);
     const total = Number(input.totalPrice);
     const count = await db.booking.count();
-    const packageItem = await db.package.findUnique({ where: { id: input.packageId } });
-    await db.booking.create({ data: { bookingCode: `OB-${new Date().getFullYear()}-${String(count + 1).padStart(4, "0")}`, clientId: input.clientId, packageId: input.packageId, packageNameSnapshot: packageItem?.name ?? "Custom trip", travelDate: new Date(input.travelDate), travelers: input.travelers, totalPrice: total, paidAmount: paid, remainingAmount: Math.max(total - paid, 0), paymentStatus: paid <= 0 ? "UNPAID" : total - paid <= 0 ? "PAID" : "PARTIAL", bookingStatus: input.bookingStatus, assignedProfileId: input.assignedProfileId || profile.profileId, notes: input.notes || null, activityLogs: { create: { action: "BOOKING_CREATED", message: `Booking created for ${packageItem?.name ?? "custom trip"}.`, profileId: profile.profileId } } } });
+    const packageItem = input.packageId ? await db.package.findUnique({ where: { id: input.packageId } }) : null;
+    await db.booking.create({ data: { bookingCode: `OB-${new Date().getFullYear()}-${String(count + 1).padStart(4, "0")}`, clientId: input.clientId, packageId: input.packageId || null, packageNameSnapshot: packageItem?.name ?? "Custom trip", travelDate: new Date(input.travelDate), travelers: input.travelers, totalPrice: total, paidAmount: paid, remainingAmount: Math.max(total - paid, 0), paymentStatus: paid <= 0 ? "UNPAID" : total - paid <= 0 ? "PAID" : "PARTIAL", bookingStatus: input.bookingStatus, assignedProfileId: input.assignedProfileId || profile.profileId, notes: input.notes || null, activityLogs: { create: { action: "BOOKING_CREATED", message: `Booking created for ${packageItem?.name ?? "custom trip"}.`, profileId: profile.profileId } } } });
   } else if (resource === "payments") {
     const parsed = paymentSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "Check the payment fields and try again." });
@@ -391,6 +391,35 @@ app.patch("/api/crm/:resource/:id", asyncRoute(async (req, res) => {
   const db = getPrisma();
   const resource = req.params.resource;
   const id = String(req.params.id);
+
+  if (resource === "leads") {
+    const parsed = leadSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: `Check the lead fields: ${parsed.error.issues.map((issue) => issue.path.join(".") || issue.message).join(", ")}.` });
+    const input = clean(parsed.data);
+    const existing = await db.lead.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: "Lead not found." });
+    if (!profile.isAdmin && existing.assignedProfileId && existing.assignedProfileId !== profile.profileId) return res.status(403).json({ error: "Forbidden" });
+    const lead = await db.lead.update({
+      where: { id },
+      data: {
+        clientName: input.clientName,
+        phone: input.phone,
+        email: input.email || null,
+        source: input.source,
+        interestedDestination: input.interestedDestination || null,
+        interestedPackage: input.interestedPackage,
+        budget: input.budget,
+        travelDate: input.travelDate ? new Date(input.travelDate) : null,
+        travelers: input.travelers,
+        travelersCount: input.travelers,
+        status: input.status,
+        assignedProfileId: input.assignedProfileId || profile.profileId,
+        notes: input.notes || null,
+      },
+    });
+    await db.activityLog.create({ data: { action: "LEAD_EDITED", message: `Lead edited for ${lead.clientName}.`, profileId: profile.profileId, leadId: lead.id } });
+    return res.json({ ok: true });
+  }
 
   if (resource === "clients") {
     const parsed = clientSchema.safeParse(req.body);
@@ -433,6 +462,96 @@ app.patch("/api/crm/:resource/:id", asyncRoute(async (req, res) => {
       },
     });
     await db.activityLog.create({ data: { action: "PACKAGE_CREATED", message: `Package edited: ${item.name}`, profileId: profile.profileId } });
+    return res.json({ ok: true });
+  }
+
+  if (resource === "bookings") {
+    const parsed = bookingSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Check the booking fields and try again." });
+    const input = clean(parsed.data);
+    const existing = await db.booking.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: "Booking not found." });
+    if (!profile.isAdmin && existing.assignedProfileId && existing.assignedProfileId !== profile.profileId) return res.status(403).json({ error: "Forbidden" });
+    const total = Number(input.totalPrice);
+    const paid = Number(input.paidAmount ?? 0);
+    const packageItem = input.packageId ? await db.package.findUnique({ where: { id: input.packageId } }) : null;
+    const booking = await db.booking.update({
+      where: { id },
+      data: {
+        clientId: input.clientId,
+        packageId: input.packageId || null,
+        packageNameSnapshot: packageItem?.name ?? existing.packageNameSnapshot ?? "Custom trip",
+        travelDate: new Date(input.travelDate),
+        travelers: input.travelers,
+        totalPrice: total,
+        paidAmount: paid,
+        remainingAmount: Math.max(total - paid, 0),
+        paymentStatus: paid <= 0 ? "UNPAID" : total - paid <= 0 ? "PAID" : "PARTIAL",
+        bookingStatus: input.bookingStatus,
+        assignedProfileId: input.assignedProfileId || profile.profileId,
+        notes: input.notes || null,
+      },
+    });
+    await db.activityLog.create({ data: { action: "BOOKING_EDITED", message: `Booking edited: ${booking.bookingCode}.`, profileId: profile.profileId, bookingId: booking.id } });
+    return res.json({ ok: true });
+  }
+
+  if (resource === "payments") {
+    const parsed = paymentSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Check the payment fields and try again." });
+    const input = clean(parsed.data);
+    const existing = await db.payment.findUnique({ where: { id }, include: { booking: true } });
+    if (!existing) return res.status(404).json({ error: "Payment not found." });
+    if (!profile.isAdmin && existing.recordedById && existing.recordedById !== profile.profileId) return res.status(403).json({ error: "Forbidden" });
+    const booking = await db.booking.findUnique({ where: { id: input.bookingId }, include: { client: true, payments: true } });
+    if (!booking) return res.status(404).json({ error: "Booking not found." });
+    const oldBookingId = existing.bookingId;
+    await db.payment.update({
+      where: { id },
+      data: {
+        bookingId: booking.id,
+        clientId: booking.clientId,
+        clientName: booking.client.fullName,
+        amountPaid: input.amountPaid,
+        paymentMethod: input.paymentMethod,
+        paymentDate: new Date(input.paymentDate),
+        notes: input.notes || null,
+      },
+    });
+    const bookingIds = Array.from(new Set([oldBookingId, booking.id]));
+    for (const bookingId of bookingIds) {
+      const item = await db.booking.findUnique({ where: { id: bookingId } });
+      if (!item) continue;
+      const payments = await db.payment.findMany({ where: { bookingId } });
+      const newPaid = payments.reduce((sum, payment) => sum + Number(payment.amountPaid), 0);
+      const total = Number(item.totalPrice);
+      await db.booking.update({ where: { id: bookingId }, data: { paidAmount: newPaid, remainingAmount: Math.max(total - newPaid, 0), paymentStatus: newPaid <= 0 ? "UNPAID" : total - newPaid <= 0 ? "PAID" : "PARTIAL" } });
+    }
+    await db.activityLog.create({ data: { action: "PAYMENT_ADDED", message: `Payment edited for ${booking.bookingCode}.`, profileId: profile.profileId, paymentId: id, bookingId: booking.id } });
+    return res.json({ ok: true });
+  }
+
+  if (resource === "tasks") {
+    const parsed = taskSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Check the task fields and try again." });
+    const input = clean(parsed.data);
+    const existing = await db.task.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: "Task not found." });
+    if (!profile.isAdmin && existing.assignedProfileId && existing.assignedProfileId !== profile.profileId) return res.status(403).json({ error: "Forbidden" });
+    const dueAt = new Date(input.dueAt);
+    const task = await db.task.update({
+      where: { id },
+      data: {
+        title: input.title,
+        description: input.description || null,
+        dueAt,
+        dueDate: dueAt,
+        priority: input.priority,
+        status: input.status,
+        assignedProfileId: input.assignedProfileId || profile.profileId,
+      },
+    });
+    await db.activityLog.create({ data: { action: "TASK_CREATED", message: `Task edited: ${task.title}`, profileId: profile.profileId, taskId: task.id } });
     return res.json({ ok: true });
   }
 
