@@ -748,6 +748,25 @@ tbody tr:last-child td {
   color: var(--text2);
 }
 
+.table-action {
+  min-height: 28px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text2);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  transition: all 0.15s;
+}
+
+.table-action:hover {
+  color: var(--text);
+  border-color: rgba(232, 0, 61, 0.4);
+  background: rgba(232, 0, 61, 0.1);
+}
+
 .empty,
 .pagination-meta {
   color: var(--text3);

@@ -294,13 +294,13 @@ app.get("/api/crm/:resource", asyncRoute(async (req, res) => {
   if (resource === "clients") {
     const where = q ? { OR: [{ fullName: { contains: q, mode: "insensitive" as const } }, { phone: { contains: q } }, { email: { contains: q, mode: "insensitive" as const } }] } : {};
     const [rows, total] = await Promise.all([db.client.findMany({ where, include: { bookings: true }, orderBy: { updatedAt: "desc" }, skip, take: pageSize }), db.client.count({ where })]);
-    return paged(res, rows.map((client) => ({ name: client.fullName, phone: client.phone, email: client.email ?? "-", bookings: client.bookings.length, paid: money(client.bookings.reduce((sum, booking) => sum + Number(booking.paidAmount), 0)), remaining: money(client.bookings.reduce((sum, booking) => sum + Number(booking.remainingAmount), 0)) })), total, page, pageSize);
+    return paged(res, rows.map((client) => ({ id: client.id, fullName: client.fullName, name: client.fullName, phone: client.phone, email: client.email ?? "", nationality: client.nationality ?? "", passportNumber: client.passportNumber ?? "", notes: client.notes ?? "", bookings: client.bookings.length, paid: money(client.bookings.reduce((sum, booking) => sum + Number(booking.paidAmount), 0)), remaining: money(client.bookings.reduce((sum, booking) => sum + Number(booking.remainingAmount), 0)) })), total, page, pageSize);
   }
 
   if (resource === "packages") {
     const where = q ? { OR: [{ name: { contains: q, mode: "insensitive" as const } }, { destination: { contains: q, mode: "insensitive" as const } }] } : {};
     const [rows, total] = await Promise.all([db.package.findMany({ where, orderBy: { updatedAt: "desc" }, skip, take: pageSize }), db.package.count({ where })]);
-    return paged(res, rows.map((item) => ({ name: item.name, destination: item.destination, duration: item.duration, price: money(item.price.toString()), capacity: item.capacity, status: enumLabel(item.status) })), total, page, pageSize);
+    return paged(res, rows.map((item) => ({ id: item.id, name: item.name, destination: item.destination, duration: item.duration, rawPrice: item.price.toString(), price: money(item.price.toString()), description: item.description, includedServices: item.includedServices, excludedServices: item.excludedServices, capacity: item.capacity, status: item.status })), total, page, pageSize);
   }
 
   if (resource === "bookings") {
@@ -386,10 +386,64 @@ app.post("/api/crm/:resource", asyncRoute(async (req, res) => {
   res.json({ ok: true });
 }));
 
+app.patch("/api/crm/:resource/:id", asyncRoute(async (req, res) => {
+  const { profile } = await requireProfile(req);
+  const db = getPrisma();
+  const resource = req.params.resource;
+  const id = String(req.params.id);
+
+  if (resource === "clients") {
+    const parsed = clientSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Check the client fields and try again." });
+    const input = clean(parsed.data);
+    const existing = await db.client.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: "Client not found." });
+    if (!profile.isAdmin && existing.assignedProfileId && existing.assignedProfileId !== profile.profileId) return res.status(403).json({ error: "Forbidden" });
+    const client = await db.client.update({
+      where: { id },
+      data: {
+        fullName: input.fullName,
+        phone: input.phone,
+        email: input.email || null,
+        nationality: input.nationality || null,
+        passportNumber: input.passportNumber || null,
+        notes: input.notes || null,
+      },
+    });
+    await db.activityLog.create({ data: { action: "CLIENT_CREATED", message: `Client ${client.fullName} was edited.`, profileId: profile.profileId, clientId: client.id } });
+    return res.json({ ok: true });
+  }
+
+  if (resource === "packages") {
+    const parsed = packageSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Check the package fields and try again." });
+    const input = parsed.data;
+    const item = await db.package.update({
+      where: { id },
+      data: {
+        name: input.name,
+        destination: input.destination,
+        duration: input.duration,
+        price: input.price,
+        description: input.description,
+        includedServices: input.includedServices,
+        excludedServices: input.excludedServices,
+        capacity: input.capacity,
+        status: input.status,
+      },
+    });
+    await db.activityLog.create({ data: { action: "PACKAGE_CREATED", message: `Package edited: ${item.name}`, profileId: profile.profileId } });
+    return res.json({ ok: true });
+  }
+
+  res.status(404).json({ error: "This resource cannot be edited yet." });
+}));
+
 for (const resource of ["dashboard", "leads", "clients", "packages", "bookings", "payments", "tasks", "activity"] as const) {
   app.get(`/api/${resource}`, (req, res) => res.redirect(307, `/api/crm/${resource}${req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : ""}`));
   if (resource !== "dashboard" && resource !== "activity") {
     app.post(`/api/${resource}`, (_req, res) => res.redirect(307, `/api/crm/${resource}`));
+    app.patch(`/api/${resource}/:id`, (req, res) => res.redirect(307, `/api/crm/${resource}/${req.params.id}`));
   }
 }
 

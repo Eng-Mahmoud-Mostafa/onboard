@@ -6,6 +6,7 @@ import { api, AuthState, postJson } from "./api";
 
 type Profile = { id: string; name: string; isAdmin: boolean };
 type Lookup = { profiles: { id: string; name: string }[]; clients: { id: string; fullName: string }[]; packages: { id: string; name: string }[]; bookings: { id: string; bookingCode: string }[] };
+type FieldConfig = { name: string; label: string; type?: string; options?: { value: string; label: string }[]; required?: boolean; defaultValue?: string | number; placeholder?: string };
 type Dashboard = {
   stats: { label: string; value: string | number; hint: string }[];
   profiles: Record<string, unknown>[];
@@ -217,15 +218,18 @@ function ResourcePage({ resource }: { resource: keyof typeof resourceConfig }) {
   const config = resourceConfig[resource];
   const [q, setQ] = useState("");
   const [refresh, setRefresh] = useState(0);
+  const [editing, setEditing] = useState<Record<string, unknown> | null>(null);
   const debounced = useDebouncedValue(q, 350);
   const { data: rows, isLoading, error } = useQuery({ queryKey: [resource, debounced, refresh], queryFn: () => api<ResourceResponse>(`/api/${resource}?q=${encodeURIComponent(debounced)}`) });
   const canCreate = resource !== "activity";
+  const canEdit = resource === "clients" || resource === "packages";
   if (error) return <ErrorState error={error} />;
   return (
     <>
       <PageHeader title={config.title} description={config.description} action={canCreate ? <CreateDrawer resource={resource} onDone={() => setRefresh((x) => x + 1)} /> : undefined} />
       <div className="toolbar"><input value={q} onChange={(event) => setQ(event.target.value)} placeholder="Search..." />{resource === "leads" || resource === "tasks" ? <ImportExcel type={resource} onDone={() => setRefresh((x) => x + 1)} /> : null}</div>
-      {rows && !isLoading ? <><DataTable headers={config.headers} labels={config.labels} rows={rows.rows} /><PaginationMeta rows={rows} /></> : <Loading />}
+      {rows && !isLoading ? <><DataTable headers={canEdit ? [...config.headers, "Actions"] : config.headers} labels={config.labels} rows={rows.rows} onEdit={canEdit ? setEditing : undefined} /><PaginationMeta rows={rows} /></> : <Loading />}
+      {editing && <RecordForm resource={resource} initial={editing} onClose={() => setEditing(null)} onDone={() => setRefresh((x) => x + 1)} />}
     </>
   );
 }
@@ -247,8 +251,8 @@ function ErrorState({ error }: { error: unknown }) {
   return <div className="error">{error instanceof Error ? error.message : "Something went wrong."}</div>;
 }
 
-function DataTable({ headers, labels, rows }: { headers: readonly string[]; labels: readonly string[]; rows: Record<string, unknown>[] }) {
-  return <div className="table-wrap"><table><thead><tr>{headers.map((header) => <th key={header}>{header}</th>)}</tr></thead><tbody>{rows.map((row, index) => <tr key={index}>{labels.map((label) => <td key={label}>{renderCell(label, row[label])}</td>)}</tr>)}</tbody></table>{!rows.length && <p className="empty">No records yet.</p>}</div>;
+function DataTable({ headers, labels, rows, onEdit }: { headers: readonly string[]; labels: readonly string[]; rows: Record<string, unknown>[]; onEdit?: (row: Record<string, unknown>) => void }) {
+  return <div className="table-wrap"><table><thead><tr>{headers.map((header) => <th key={header}>{header}</th>)}</tr></thead><tbody>{rows.map((row, index) => <tr key={index}>{labels.map((label) => <td key={label}>{renderCell(label, row[label])}</td>)}{onEdit && <td><button className="table-action" type="button" onClick={(event) => { event.stopPropagation(); onEdit(row); }}>Edit</button></td>}</tr>)}</tbody></table>{!rows.length && <p className="empty">No records yet.</p>}</div>;
 }
 
 function renderCell(label: string, value: unknown) {
@@ -273,33 +277,41 @@ function CreateDrawer({ resource, onDone }: { resource: string; onDone: () => vo
   return <>{<button className="primary small" onClick={() => setOpen(true)}>Add {resource.slice(0, -1)}</button>}{open && <RecordForm resource={resource} onClose={() => setOpen(false)} onDone={onDone} />}</>;
 }
 
-function RecordForm({ resource, onClose, onDone }: { resource: string; onClose: () => void; onDone: () => void }) {
+function RecordForm({ resource, onClose, onDone, initial }: { resource: string; onClose: () => void; onDone: () => void; initial?: Record<string, unknown> }) {
   const [lookups, setLookups] = useState<Lookup | null>(null);
   const [error, setError] = useState("");
   useEffect(() => { api<Lookup>("/api/lookups").then(setLookups); }, []);
   const fields = useMemo(() => formFields(resource, lookups), [resource, lookups]);
+  const isEditing = Boolean(initial?.id);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
     const form = new FormData(event.currentTarget);
     const payload = Object.fromEntries(form.entries());
     try {
-      await postJson(`/api/crm/${resource}`, payload);
+      if (isEditing) await api(`/api/${resource}/${initial?.id}`, { method: "PATCH", body: JSON.stringify(payload) });
+      else await postJson(`/api/crm/${resource}`, payload);
       onDone();
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save.");
     }
   }
-  return <div className="modal"><form className="drawer" onSubmit={submit}><h3>Add {resource.slice(0, -1)}</h3>{fields.map((field) => <Field key={field.name} {...field} />)}{error && <p className="error">{error}</p>}<div className="button-row"><button type="button" className="ghost" onClick={onClose}>Cancel</button><button className="primary">Save</button></div></form></div>;
+  return <div className="modal"><form className="drawer" onSubmit={submit}><h3>{isEditing ? "Edit" : "Add"} {resource.slice(0, -1)}</h3>{fields.map((field) => <Field key={field.name} {...field} defaultValue={fieldValue(field.name, initial, field.defaultValue)} />)}{error && <p className="error">{error}</p>}<div className="button-row"><button type="button" className="ghost" onClick={onClose}>Cancel</button><button className="primary">{isEditing ? "Save changes" : "Save"}</button></div></form></div>;
 }
 
-function Field(field: { name: string; label: string; type?: string; options?: { value: string; label: string }[]; required?: boolean; defaultValue?: string | number; placeholder?: string }) {
-  if (field.options) return <label>{field.label}<select name={field.name} required={field.required}>{!field.required && <option value="">Not set</option>}{field.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>;
+function fieldValue(name: string, initial?: Record<string, unknown>, fallback?: string | number) {
+  if (!initial) return fallback;
+  if (name === "price" && initial.rawPrice != null) return String(initial.rawPrice);
+  return initial[name] == null ? fallback : String(initial[name]);
+}
+
+function Field(field: FieldConfig) {
+  if (field.options) return <label>{field.label}<select name={field.name} required={field.required} defaultValue={field.defaultValue}>{!field.required && <option value="">Not set</option>}{field.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>;
   return <label>{field.label}<input name={field.name} type={field.type ?? "text"} required={field.required} defaultValue={field.defaultValue} placeholder={field.placeholder} /></label>;
 }
 
-function formFields(resource: string, lookups: Lookup | null) {
+function formFields(resource: string, lookups: Lookup | null): FieldConfig[] {
   const profileOptions = (lookups?.profiles ?? []).map((p) => ({ value: p.id, label: p.name }));
   if (resource === "leads") return [
     { name: "clientName", label: "Client name", required: true, placeholder: "Client or lead name" },
@@ -315,8 +327,25 @@ function formFields(resource: string, lookups: Lookup | null) {
     { name: "assignedProfileId", label: "Assigned profile", options: profileOptions },
     { name: "notes", label: "Notes", placeholder: "Optional" },
   ];
-  if (resource === "clients") return [{ name: "fullName", label: "Full name" }, { name: "phone", label: "Phone" }, { name: "email", label: "Email", type: "email" }, { name: "nationality", label: "Nationality" }, { name: "passportNumber", label: "Passport number" }];
-  if (resource === "packages") return [{ name: "name", label: "Name" }, { name: "destination", label: "Destination" }, { name: "duration", label: "Duration" }, { name: "price", label: "Price", type: "number" }, { name: "description", label: "Description" }, { name: "includedServices", label: "Included services" }, { name: "excludedServices", label: "Excluded services" }, { name: "capacity", label: "Capacity", type: "number" }, { name: "status", label: "Status", options: ["ACTIVE", "DRAFT", "ARCHIVED"].map((x) => ({ value: x, label: x })) }];
+  if (resource === "clients") return [
+    { name: "fullName", label: "Full name", required: true },
+    { name: "phone", label: "Phone", required: true },
+    { name: "email", label: "Email", type: "email", placeholder: "Optional" },
+    { name: "nationality", label: "Nationality", placeholder: "Optional" },
+    { name: "passportNumber", label: "Passport number", placeholder: "Optional" },
+    { name: "notes", label: "Notes", placeholder: "Optional" },
+  ];
+  if (resource === "packages") return [
+    { name: "name", label: "Name", required: true },
+    { name: "destination", label: "Destination", required: true },
+    { name: "duration", label: "Duration", required: true },
+    { name: "price", label: "Price", type: "number", required: true },
+    { name: "description", label: "Description", required: true },
+    { name: "includedServices", label: "Included services", required: true },
+    { name: "excludedServices", label: "Excluded services", required: true },
+    { name: "capacity", label: "Capacity", type: "number", required: true },
+    { name: "status", label: "Status", required: true, options: ["ACTIVE", "DRAFT", "ARCHIVED"].map((x) => ({ value: x, label: x })) },
+  ];
   if (resource === "tasks") return [{ name: "title", label: "Task title" }, { name: "description", label: "Description" }, { name: "dueAt", label: "Due date", type: "datetime-local" }, { name: "priority", label: "Priority", options: ["LOW", "MEDIUM", "HIGH"].map((x) => ({ value: x, label: x })) }, { name: "assignedProfileId", label: "Assigned profile", options: profileOptions }];
   if (resource === "bookings") return [{ name: "clientId", label: "Client", options: (lookups?.clients ?? []).map((x) => ({ value: x.id, label: x.fullName })) }, { name: "packageId", label: "Package", options: (lookups?.packages ?? []).map((x) => ({ value: x.id, label: x.name })) }, { name: "travelDate", label: "Travel date", type: "date" }, { name: "travelers", label: "Travelers", type: "number" }, { name: "totalPrice", label: "Total price", type: "number" }, { name: "paidAmount", label: "Paid amount", type: "number" }, { name: "bookingStatus", label: "Status", options: ["PENDING", "CONFIRMED", "CANCELLED", "COMPLETED"].map((x) => ({ value: x, label: x })) }, { name: "assignedProfileId", label: "Assigned profile", options: profileOptions }];
   if (resource === "payments") return [{ name: "bookingId", label: "Booking", options: (lookups?.bookings ?? []).map((x) => ({ value: x.id, label: x.bookingCode })) }, { name: "amountPaid", label: "Amount", type: "number" }, { name: "paymentMethod", label: "Method", options: ["CASH", "BANK_TRANSFER", "INSTAPAY", "VODAFONE_CASH", "CARD", "OTHER"].map((x) => ({ value: x, label: x })) }, { name: "paymentDate", label: "Date", type: "date" }];
