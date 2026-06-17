@@ -5,10 +5,14 @@ const optionalText = z.preprocess((value) => value === "" ? undefined : value, z
 const optionalEmail = z.preprocess((value) => value === "" ? undefined : value, z.string().trim().email().optional());
 const optionalDateText = z.preprocess((value) => value === "" ? undefined : value, z.string().optional());
 const optionalNonnegativeNumber = z.preprocess((value) => value === "" || value == null ? undefined : value, z.coerce.number().nonnegative().optional());
-export const requestOtpSchema = z.object({ email: emailSchema });
+export const requestOtpSchema = z.object({
+  email: emailSchema,
+  keepSignedIn: z.coerce.boolean().optional().default(false),
+});
 export const verifyOtpSchema = z.object({
   email: emailSchema,
   otp: z.string().trim().regex(/^\d{6}$/),
+  keepSignedIn: z.coerce.boolean().optional().default(false),
 });
 export const profileSchema = z.object({
   name: z.string().trim().min(2).max(40),

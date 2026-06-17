@@ -187,6 +187,23 @@ label select {
   margin: -8px 0 16px;
 }
 
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: -4px 0 16px;
+  color: var(--text2);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.check-row input {
+  width: 16px;
+  min-height: 16px;
+  margin: 0;
+  accent-color: var(--brand);
+}
+
 .login-hint,
 .small-link {
   display: block;

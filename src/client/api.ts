@@ -1,5 +1,5 @@
 export type AuthState = {
-  session: { userId: string; email: string } | null;
+  session: { userId: string; email: string; keepSignedIn?: boolean } | null;
   profile: { profileId: string; profileName: string; isAdmin: boolean } | null;
 };
 

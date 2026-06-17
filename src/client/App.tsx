@@ -90,6 +90,7 @@ function Splash() {
 function Login({ auth }: { auth: AuthState }) {
   const navigate = useNavigate();
   const [email, setEmail] = useState("info@onboard-tours.com");
+  const [keepSignedIn, setKeepSignedIn] = useState(true);
   const [error, setError] = useState("");
   if (auth.profile) return <Navigate to="/dashboard" replace />;
   if (auth.session) return <Navigate to="/profiles" replace />;
@@ -97,7 +98,7 @@ function Login({ auth }: { auth: AuthState }) {
     event.preventDefault();
     setError("");
     try {
-      const result = await postJson<{ next: string }>("/api/auth/request-otp", { email });
+      const result = await postJson<{ next: string }>("/api/auth/request-otp", { email, keepSignedIn });
       navigate(result.next);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not send OTP.");
@@ -116,6 +117,10 @@ function Login({ auth }: { auth: AuthState }) {
             <label className="form-label" htmlFor="work-email">Work Email</label>
             <input id="work-email" value={email} onChange={(event) => setEmail(event.target.value)} type="email" placeholder="you@onboard-tours.com" required />
             <div className="field-hint">Use your @onboard-tours.com email</div>
+            <label className="check-row">
+              <input type="checkbox" checked={keepSignedIn} onChange={(event) => setKeepSignedIn(event.target.checked)} />
+              <span>Keep me signed in</span>
+            </label>
           {error && <p className="error">{error}</p>}
             <button className="primary">Send verification code</button>
             <div className="login-hint">A 6-digit code will be sent. Valid for 10 minutes.</div>
@@ -130,13 +135,14 @@ function Verify({ refreshAuth }: { refreshAuth: () => Promise<void> }) {
   const [params] = useSearchParams();
   const navigate = useNavigate();
   const email = params.get("email") ?? "";
+  const keepSignedIn = params.get("keep") === "1";
   const [otp, setOtp] = useState("");
   const [error, setError] = useState("");
   async function submit(event: FormEvent) {
     event.preventDefault();
     setError("");
     try {
-      const result = await postJson<{ next: string }>("/api/auth/verify", { email, otp });
+      const result = await postJson<{ next: string }>("/api/auth/verify", { email, otp, keepSignedIn });
       await refreshAuth();
       navigate(result.next);
     } catch (err) {

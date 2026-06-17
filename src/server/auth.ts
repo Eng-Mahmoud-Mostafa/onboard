@@ -6,7 +6,7 @@ import { getPrisma } from "./db";
 const sessionCookie = "onboard_session";
 const profileCookie = "onboard_profile";
 
-export type SessionPayload = { userId: string; email: string };
+export type SessionPayload = { userId: string; email: string; keepSignedIn?: boolean };
 export type ProfilePayload = { profileId: string; profileName: string; isAdmin: boolean };
 
 function secret() {
@@ -55,12 +55,14 @@ function cookieOptions(maxAge: number) {
   };
 }
 
-export async function setSession(res: Response, payload: SessionPayload) {
-  res.cookie(sessionCookie, await sign(payload, "7d"), cookieOptions(1000 * 60 * 60 * 24 * 7));
+export async function setSession(res: Response, payload: SessionPayload, keepSignedIn = false) {
+  const maxAge = keepSignedIn ? 1000 * 60 * 60 * 24 * 30 : 1000 * 60 * 60 * 24;
+  res.cookie(sessionCookie, await sign({ ...payload, keepSignedIn }, keepSignedIn ? "30d" : "24h"), cookieOptions(maxAge));
 }
 
-export async function setProfile(res: Response, payload: ProfilePayload) {
-  res.cookie(profileCookie, await sign(payload, "12h"), cookieOptions(1000 * 60 * 60 * 12));
+export async function setProfile(res: Response, payload: ProfilePayload, keepSignedIn = false) {
+  const maxAge = keepSignedIn ? 1000 * 60 * 60 * 24 * 30 : 1000 * 60 * 60 * 12;
+  res.cookie(profileCookie, await sign(payload, keepSignedIn ? "30d" : "12h"), cookieOptions(maxAge));
 }
 
 export function clearAuth(res: Response) {

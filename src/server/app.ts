@@ -202,7 +202,8 @@ app.post("/api/auth/request-otp", asyncRoute(async (req, res) => {
   const user = await db.user.upsert({ where: { email }, update: {}, create: { email } });
   await db.otpToken.create({ data: { email, tokenHash: await hashValue(otp), expiresAt: new Date(Date.now() + 10 * 60 * 1000), userId: user.id } });
   if (!(process.env.NODE_ENV !== "production" && process.env.SKIP_OTP_EMAIL_IN_DEV === "true")) await sendOtpEmail(email, otp);
-  res.json({ ok: true, email, next: `/verify?email=${encodeURIComponent(email)}` });
+  const keepParam = parsed.data.keepSignedIn ? "&keep=1" : "";
+  res.json({ ok: true, email, next: `/verify?email=${encodeURIComponent(email)}${keepParam}` });
 }));
 
 app.post("/api/auth/send-otp", (_req, res) => res.redirect(307, "/api/auth/request-otp"));
@@ -220,7 +221,7 @@ app.post("/api/auth/verify", asyncRoute(async (req, res) => {
   if (!matches) return res.status(400).json({ error: "Incorrect code. Try again." });
 
   const user = await db.user.findUniqueOrThrow({ where: { email: parsed.data.email } });
-  await setSession(res, { userId: user.id, email: user.email });
+  await setSession(res, { userId: user.id, email: user.email }, parsed.data.keepSignedIn);
   res.json({ ok: true, next: "/profiles" });
 }));
 
@@ -288,19 +289,19 @@ app.post("/api/profiles", asyncRoute(async (req, res) => {
 }));
 
 app.post("/api/profiles/unlock", asyncRoute(async (req, res) => {
-  await requireSession(req);
+  const session = await requireSession(req);
   const profile = await getPrisma().profile.findUnique({ where: { id: String(req.body.profileId ?? "") } });
   if (!profile || !(await compareHash(String(req.body.password ?? ""), profile.passwordHash))) return res.status(400).json({ error: "Profile password is incorrect." });
-  await setProfile(res, { profileId: profile.id, profileName: profile.name, isAdmin: profile.isAdmin });
+  await setProfile(res, { profileId: profile.id, profileName: profile.name, isAdmin: profile.isAdmin }, Boolean(session.keepSignedIn));
   await getPrisma().activityLog.create({ data: { action: "PROFILE_LOGGED_IN", message: `${profile.name} unlocked their CRM workspace.`, profileId: profile.id } });
   res.json({ ok: true, next: "/dashboard" });
 }));
 
 app.post("/api/profiles/:id/unlock", asyncRoute(async (req, res) => {
-  await requireSession(req);
+  const session = await requireSession(req);
   const profile = await getPrisma().profile.findUnique({ where: { id: String(req.params.id) } });
   if (!profile || !(await compareHash(String(req.body.password ?? ""), profile.passwordHash))) return res.status(400).json({ error: "Profile password is incorrect." });
-  await setProfile(res, { profileId: profile.id, profileName: profile.name, isAdmin: profile.isAdmin });
+  await setProfile(res, { profileId: profile.id, profileName: profile.name, isAdmin: profile.isAdmin }, Boolean(session.keepSignedIn));
   await getPrisma().activityLog.create({ data: { action: "PROFILE_LOGGED_IN", message: `${profile.name} unlocked their CRM workspace.`, profileId: profile.id } });
   res.json({ ok: true, next: "/dashboard" });
 }));
