@@ -12,8 +12,17 @@ type Dashboard = {
   profiles: Record<string, unknown>[];
   upcoming: { title: string; due: string; profile: string }[];
   activity: { message: string; date: string; profile: string }[];
+  charts: {
+    leadStatus: ChartDatum[];
+    bookingStatus: ChartDatum[];
+    taskStatus: ChartDatum[];
+    revenueByProfile: ChartDatum[];
+    topPackages: ChartDatum[];
+    agencyBookings: ChartDatum[];
+  };
   isAdmin: boolean;
 };
+type ChartDatum = { label: string; value: number };
 type ResourceResponse = { rows: Record<string, unknown>[]; total: number; page: number; pageCount: number };
 type DetailResponse = {
   title: string;
@@ -223,13 +232,44 @@ function DashboardPage() {
     <>
       <PageHeader title="Dashboard" description="Travel sales, follow-up, booking, profile, and revenue overview." />
       <section className="stats">{data.stats.map((stat) => <div className="stat" key={stat.label}><span>{stat.label}</span><b>{stat.value}</b><small>{stat.hint}</small></div>)}</section>
-      {data.isAdmin && <DataTable headers={["Profile", "Role", "Leads", "Open tasks", "Bookings", "Revenue", "Conversion"]} labels={["profile", "role", "leads", "openTasks", "bookings", "revenue", "conversion"]} rows={data.profiles} />}
+      <section className="dashboard-charts">
+        <ChartCard title="Lead pipeline" subtitle="Inquiry stages by visible profile data"><HorizontalBars data={data.charts.leadStatus} tone="red" /></ChartCard>
+        <ChartCard title="Booking status" subtitle="Confirmed, pending, completed, and cancelled trips"><SegmentChart data={data.charts.bookingStatus} /></ChartCard>
+        <ChartCard title="Task health" subtitle="Follow-up workload and completion"><SegmentChart data={data.charts.taskStatus} /></ChartCard>
+        <ChartCard title="Revenue by profile" subtitle="Recorded payments ranked by owner"><HorizontalBars data={data.charts.revenueByProfile} money tone="green" /></ChartCard>
+        <ChartCard title="Top packages" subtitle="Most booked products"><HorizontalBars data={data.charts.topPackages} tone="blue" /></ChartCard>
+        <ChartCard title="Agency bookings" subtitle="Bookings linked to company accounts"><HorizontalBars data={data.charts.agencyBookings} tone="amber" /></ChartCard>
+      </section>
+      {data.isAdmin && <div className="dashboard-table"><DataTable headers={["Profile", "Role", "Leads", "Open tasks", "Bookings", "Revenue", "Conversion"]} labels={["profile", "role", "leads", "openTasks", "bookings", "revenue", "conversion"]} rows={data.profiles} /></div>}
       <section className="two-col">
         <div className="card"><h3>Upcoming tasks</h3>{data.upcoming.map((task, index) => <div className="mini-row" key={index}><b>{task.title}</b><span>{task.due} - {task.profile}</span></div>)}</div>
         <div className="card"><h3>Recent activity</h3>{data.activity.map((item, index) => <div className="mini-row active" key={index}><b>{item.message}</b><span>{item.profile} - {item.date}</span></div>)}</div>
       </section>
     </>
   );
+}
+
+function ChartCard({ title, subtitle, children }: { title: string; subtitle: string; children: ReactNode }) {
+  return <div className="chart-card"><div className="chart-head"><h3>{title}</h3><span>{subtitle}</span></div>{children}</div>;
+}
+
+function HorizontalBars({ data, money, tone }: { data: ChartDatum[]; money?: boolean; tone: "red" | "green" | "blue" | "amber" }) {
+  const max = Math.max(...data.map((item) => item.value), 1);
+  const visible = data.filter((item) => item.value > 0);
+  if (!visible.length) return <p className="empty chart-empty">No data yet.</p>;
+  return <div className="bar-list">{visible.map((item) => <div className="bar-row" key={item.label}><div className="bar-meta"><span>{item.label}</span><b>{money ? moneyShort(item.value) : item.value}</b></div><div className="bar-track"><div className={`bar-fill ${tone}`} style={{ width: `${Math.max((item.value / max) * 100, 4)}%` }} /></div></div>)}</div>;
+}
+
+function SegmentChart({ data }: { data: ChartDatum[] }) {
+  const total = data.reduce((sum, item) => sum + item.value, 0);
+  if (!total) return <p className="empty chart-empty">No data yet.</p>;
+  return <div className="segment-wrap"><div className="segment-bar">{data.filter((item) => item.value > 0).map((item, index) => <div className={`segment segment-${index % 5}`} key={item.label} style={{ width: `${(item.value / total) * 100}%` }} title={`${item.label}: ${item.value}`} />)}</div><div className="segment-legend">{data.map((item, index) => <div key={item.label}><i className={`segment-dot segment-${index % 5}`} /><span>{item.label}</span><b>{item.value}</b></div>)}</div></div>;
+}
+
+function moneyShort(value: number) {
+  if (value >= 1000000) return `$${(value / 1000000).toFixed(1)}M`;
+  if (value >= 1000) return `$${(value / 1000).toFixed(1)}K`;
+  return `$${value.toLocaleString()}`;
 }
 
 function ResourcePage({ resource, profile }: { resource: keyof typeof resourceConfig; profile: NonNullable<AuthState["profile"]> }) {

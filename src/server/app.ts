@@ -260,7 +260,7 @@ app.get("/api/crm/:resource", asyncRoute(async (req, res) => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const filter = assignedFilter(current.profile);
-    const [totalLeads, newToday, pendingTasks, confirmedBookings, cancelledBookings, revenue, upcoming, activity, profiles] = await Promise.all([
+    const [totalLeads, newToday, pendingTasks, confirmedBookings, cancelledBookings, revenue, upcoming, activity, profiles, leadStatus, bookingStatus, taskStatus, revenueRows, packageRows, agencyRows] = await Promise.all([
       db.lead.count({ where: filter }),
       db.lead.count({ where: { ...filter, createdAt: { gte: today } } }),
       db.task.count({ where: { ...filter, status: "PENDING" } }),
@@ -270,7 +270,16 @@ app.get("/api/crm/:resource", asyncRoute(async (req, res) => {
       db.task.findMany({ where: { ...filter, status: "PENDING" }, include: { assignedProfile: true }, orderBy: { dueAt: "asc" }, take: 8 }),
       db.activityLog.findMany({ where: current.profile.isAdmin ? {} : { profileId: current.profile.profileId }, include: { profile: true }, orderBy: { createdAt: "desc" }, take: 8 }),
       current.profile.isAdmin ? db.profile.findMany({ include: { leads: true, bookings: true, tasks: true, payments: true }, orderBy: [{ isAdmin: "desc" }, { name: "asc" }] }) : db.profile.findMany({ where: { id: current.profile.profileId }, include: { leads: true, bookings: true, tasks: true, payments: true } }),
+      db.lead.groupBy({ by: ["status"], _count: true, where: filter }),
+      db.booking.groupBy({ by: ["bookingStatus"], _count: true, where: filter }),
+      db.task.groupBy({ by: ["status"], _count: true, where: filter }),
+      db.payment.groupBy({ by: ["recordedById"], _sum: { amountPaid: true }, where: recordedFilter(current.profile) }),
+      db.booking.groupBy({ by: ["packageNameSnapshot"], _count: true, where: filter, orderBy: { _count: { packageNameSnapshot: "desc" } }, take: 5 }),
+      db.booking.groupBy({ by: ["companyId"], _count: true, where: { ...filter, companyId: { not: null } }, orderBy: { _count: { companyId: "desc" } }, take: 5 }),
     ]);
+    const profileNameById = new Map(profiles.map((item) => [item.id, item.name]));
+    const agencyNames = agencyRows.length ? await db.company.findMany({ where: { id: { in: agencyRows.map((row) => row.companyId).filter((id): id is string => Boolean(id)) } }, select: { id: true, name: true } }) : [];
+    const agencyNameById = new Map(agencyNames.map((item) => [item.id, item.name]));
     return res.json({
       stats: [
         { label: "Total leads", value: totalLeads, hint: "Visible leads" },
@@ -283,6 +292,14 @@ app.get("/api/crm/:resource", asyncRoute(async (req, res) => {
       upcoming: upcoming.map((task) => ({ title: task.title, profile: task.assignedProfile?.name ?? "Unassigned", due: shortDate(task.dueAt) })),
       activity: activity.map((item) => ({ message: item.message, profile: item.profile?.name ?? "-", date: shortDate(item.createdAt) })),
       profiles: profiles.map((item) => ({ profile: item.name, role: item.isAdmin ? "Admin" : "Employee", leads: item.leads.length, openTasks: item.tasks.filter((task) => task.status === "PENDING").length, bookings: item.bookings.length, revenue: money(item.payments.reduce((sum, payment) => sum + Number(payment.amountPaid), 0)), conversion: item.leads.length ? `${Math.round((item.leads.filter((lead) => lead.status === "CONVERTED").length / item.leads.length) * 100)}%` : "0%" })),
+      charts: {
+        leadStatus: Object.values(LeadStatus).map((status) => ({ label: enumLabel(status), value: leadStatus.find((row) => row.status === status)?._count ?? 0 })),
+        bookingStatus: Object.values(BookingStatus).map((status) => ({ label: enumLabel(status), value: bookingStatus.find((row) => row.bookingStatus === status)?._count ?? 0 })),
+        taskStatus: Object.values(TaskStatus).map((status) => ({ label: enumLabel(status), value: taskStatus.find((row) => row.status === status)?._count ?? 0 })),
+        revenueByProfile: revenueRows.map((row) => ({ label: row.recordedById ? profileNameById.get(row.recordedById) ?? "Unassigned" : "Unassigned", value: Number(row._sum.amountPaid ?? 0) })).sort((a, b) => b.value - a.value),
+        topPackages: packageRows.map((row) => ({ label: row.packageNameSnapshot ?? "Custom trip", value: row._count })),
+        agencyBookings: agencyRows.map((row) => ({ label: row.companyId ? agencyNameById.get(row.companyId) ?? "Agency" : "Direct", value: row._count })),
+      },
       isAdmin: current.profile.isAdmin,
     });
   }
