@@ -33,6 +33,7 @@ body {
 
 button,
 input,
+textarea,
 select {
   font: inherit;
 }
@@ -148,6 +149,7 @@ label {
 }
 
 input,
+textarea,
 select {
   width: 100%;
   min-height: 40px;
@@ -166,6 +168,7 @@ input::placeholder {
 }
 
 input:focus,
+textarea:focus,
 select:focus {
   border-color: var(--brand);
   box-shadow: none;
@@ -1000,7 +1003,7 @@ nav {
   padding: 9px 12px;
   border: 1px solid rgba(37, 99, 235, 0.28);
   border-radius: 999px;
-  color: var(--brand2);
+  color: var(--text);
   font-size: 12px;
   font-weight: 700;
   background: rgba(37, 99, 235, 0.1);
@@ -1020,6 +1023,9 @@ nav {
   width: 100%;
   min-height: 74px;
   resize: vertical;
+  background: #050506;
+  color: var(--text);
+  border-color: var(--border);
 }
 
 .ai-compose button {
