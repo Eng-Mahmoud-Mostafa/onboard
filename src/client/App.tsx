@@ -294,14 +294,27 @@ function RecordForm({ resource, onClose, onDone }: { resource: string; onClose: 
   return <div className="modal"><form className="drawer" onSubmit={submit}><h3>Add {resource.slice(0, -1)}</h3>{fields.map((field) => <Field key={field.name} {...field} />)}{error && <p className="error">{error}</p>}<div className="button-row"><button type="button" className="ghost" onClick={onClose}>Cancel</button><button className="primary">Save</button></div></form></div>;
 }
 
-function Field(field: { name: string; label: string; type?: string; options?: { value: string; label: string }[] }) {
-  if (field.options) return <label>{field.label}<select name={field.name}>{field.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>;
-  return <label>{field.label}<input name={field.name} type={field.type ?? "text"} required /></label>;
+function Field(field: { name: string; label: string; type?: string; options?: { value: string; label: string }[]; required?: boolean; defaultValue?: string | number; placeholder?: string }) {
+  if (field.options) return <label>{field.label}<select name={field.name} required={field.required}>{!field.required && <option value="">Not set</option>}{field.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>;
+  return <label>{field.label}<input name={field.name} type={field.type ?? "text"} required={field.required} defaultValue={field.defaultValue} placeholder={field.placeholder} /></label>;
 }
 
 function formFields(resource: string, lookups: Lookup | null) {
   const profileOptions = (lookups?.profiles ?? []).map((p) => ({ value: p.id, label: p.name }));
-  if (resource === "leads") return [{ name: "clientName", label: "Client name" }, { name: "phone", label: "Phone" }, { name: "email", label: "Email", type: "email" }, { name: "source", label: "Source", options: ["FACEBOOK", "INSTAGRAM", "WHATSAPP", "WEBSITE", "REFERRAL", "WALK_IN", "OTHER"].map((x) => ({ value: x, label: x })) }, { name: "interestedPackage", label: "Interested package" }, { name: "travelers", label: "Travelers", type: "number" }, { name: "status", label: "Status", options: ["NEW", "CONTACTED", "INTERESTED", "FOLLOW_UP", "CONVERTED", "LOST"].map((x) => ({ value: x, label: x })) }, { name: "assignedProfileId", label: "Assigned profile", options: profileOptions }];
+  if (resource === "leads") return [
+    { name: "clientName", label: "Client name", required: true, placeholder: "Client or lead name" },
+    { name: "phone", label: "Phone", required: true, placeholder: "+20..." },
+    { name: "email", label: "Email", type: "email", placeholder: "Optional" },
+    { name: "source", label: "Source", required: true, options: ["FACEBOOK", "INSTAGRAM", "WHATSAPP", "WEBSITE", "REFERRAL", "WALK_IN", "OTHER"].map((x) => ({ value: x, label: x })) },
+    { name: "interestedDestination", label: "Interested destination", placeholder: "Optional" },
+    { name: "interestedPackage", label: "Interested package", placeholder: "Optional" },
+    { name: "budget", label: "Budget", type: "number", placeholder: "Optional" },
+    { name: "travelDate", label: "Travel date", type: "date" },
+    { name: "travelers", label: "Travelers", type: "number", defaultValue: 1, required: true },
+    { name: "status", label: "Status", required: true, options: ["NEW", "CONTACTED", "INTERESTED", "FOLLOW_UP", "CONVERTED", "LOST"].map((x) => ({ value: x, label: x })) },
+    { name: "assignedProfileId", label: "Assigned profile", options: profileOptions },
+    { name: "notes", label: "Notes", placeholder: "Optional" },
+  ];
   if (resource === "clients") return [{ name: "fullName", label: "Full name" }, { name: "phone", label: "Phone" }, { name: "email", label: "Email", type: "email" }, { name: "nationality", label: "Nationality" }, { name: "passportNumber", label: "Passport number" }];
   if (resource === "packages") return [{ name: "name", label: "Name" }, { name: "destination", label: "Destination" }, { name: "duration", label: "Duration" }, { name: "price", label: "Price", type: "number" }, { name: "description", label: "Description" }, { name: "includedServices", label: "Included services" }, { name: "excludedServices", label: "Excluded services" }, { name: "capacity", label: "Capacity", type: "number" }, { name: "status", label: "Status", options: ["ACTIVE", "DRAFT", "ARCHIVED"].map((x) => ({ value: x, label: x })) }];
   if (resource === "tasks") return [{ name: "title", label: "Task title" }, { name: "description", label: "Description" }, { name: "dueAt", label: "Due date", type: "datetime-local" }, { name: "priority", label: "Priority", options: ["LOW", "MEDIUM", "HIGH"].map((x) => ({ value: x, label: x })) }, { name: "assignedProfileId", label: "Assigned profile", options: profileOptions }];

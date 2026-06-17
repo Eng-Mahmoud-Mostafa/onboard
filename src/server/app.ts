@@ -337,9 +337,9 @@ app.post("/api/crm/:resource", asyncRoute(async (req, res) => {
 
   if (resource === "leads") {
     const parsed = leadSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: "Check the lead fields and try again." });
+    if (!parsed.success) return res.status(400).json({ error: `Check the lead fields: ${parsed.error.issues.map((issue) => issue.path.join(".") || issue.message).join(", ")}.` });
     const input = clean(parsed.data);
-    await db.lead.create({ data: { clientName: input.clientName, phone: input.phone, email: input.email || null, source: input.source, interestedPackage: input.interestedPackage, budget: input.budget, travelDate: input.travelDate ? new Date(input.travelDate) : null, travelers: input.travelers, status: input.status, assignedProfileId: input.assignedProfileId || profile.profileId, notes: input.notes || null, activityLogs: { create: { action: "LEAD_CREATED", message: `Lead created for ${input.clientName}.`, profileId: profile.profileId } } } });
+    await db.lead.create({ data: { clientName: input.clientName, phone: input.phone, email: input.email || null, source: input.source, interestedDestination: input.interestedDestination || null, interestedPackage: input.interestedPackage, budget: input.budget, travelDate: input.travelDate ? new Date(input.travelDate) : null, travelers: input.travelers, travelersCount: input.travelers, status: input.status, assignedProfileId: input.assignedProfileId || profile.profileId, notes: input.notes || null, activityLogs: { create: { action: "LEAD_CREATED", message: `Lead created for ${input.clientName}.`, profileId: profile.profileId } } } });
   } else if (resource === "clients") {
     const parsed = clientSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "Check the client fields and try again." });

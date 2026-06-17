@@ -1,6 +1,10 @@
 import { z } from "zod";
 
 export const emailSchema = z.string().trim().email().toLowerCase();
+const optionalText = z.preprocess((value) => value === "" ? undefined : value, z.string().trim().optional());
+const optionalEmail = z.preprocess((value) => value === "" ? undefined : value, z.string().trim().email().optional());
+const optionalDateText = z.preprocess((value) => value === "" ? undefined : value, z.string().optional());
+const optionalNonnegativeNumber = z.preprocess((value) => value === "" || value == null ? undefined : value, z.coerce.number().nonnegative().optional());
 export const requestOtpSchema = z.object({ email: emailSchema });
 export const verifyOtpSchema = z.object({
   email: emailSchema,
@@ -13,15 +17,16 @@ export const profileSchema = z.object({
 export const leadSchema = z.object({
   clientName: z.string().trim().min(2),
   phone: z.string().trim().min(5),
-  email: z.string().trim().email().optional().or(z.literal("")),
+  email: optionalEmail,
   source: z.enum(["FACEBOOK", "INSTAGRAM", "WHATSAPP", "WEBSITE", "REFERRAL", "WALK_IN", "OTHER"]),
-  interestedPackage: z.string().trim().min(2),
-  budget: z.coerce.number().nonnegative().optional(),
-  travelDate: z.string().optional(),
-  travelers: z.coerce.number().int().positive().default(1),
+  interestedDestination: optionalText,
+  interestedPackage: z.preprocess((value) => value === "" || value == null ? "General travel inquiry" : value, z.string().trim().min(2)),
+  budget: optionalNonnegativeNumber,
+  travelDate: optionalDateText,
+  travelers: z.preprocess((value) => value === "" || value == null ? 1 : value, z.coerce.number().int().positive()).default(1),
   status: z.enum(["NEW", "CONTACTED", "INTERESTED", "FOLLOW_UP", "CONVERTED", "LOST"]).default("NEW"),
-  assignedProfileId: z.string().optional(),
-  notes: z.string().optional(),
+  assignedProfileId: optionalText,
+  notes: optionalText,
 });
 export const clientSchema = z.object({
   fullName: z.string().trim().min(2),
