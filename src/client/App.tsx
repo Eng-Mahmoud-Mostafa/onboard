@@ -1,6 +1,6 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { BarChart3, Building2, CalendarCheck, CircleDollarSign, ClipboardList, History, LayoutDashboard, LogOut, Mail, PackageOpen, Plane, Search, Settings, ShieldCheck, Upload, Users } from "lucide-react";
+import { BarChart3, Building2, CalendarCheck, CircleDollarSign, ClipboardCheck, ClipboardList, History, LayoutDashboard, LogOut, Mail, PackageOpen, Plane, Search, Settings, ShieldCheck, Upload, Users } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { api, AuthState, postJson } from "./api";
 
@@ -24,6 +24,8 @@ type Dashboard = {
 };
 type ChartDatum = { label: string; value: number };
 type ResourceResponse = { rows: Record<string, unknown>[]; total: number; page: number; pageCount: number };
+type DeploymentItem = { section: string; label: string; status: "ready" | "warning" | "missing"; detail: string };
+type DeploymentChecklist = { items: DeploymentItem[]; summary: { ready: number; blocking: number; warnings: number; total: number } };
 type DetailResponse = {
   title: string;
   subtitle: string;
@@ -45,6 +47,7 @@ const nav = [
   { href: "/tasks", label: "Tasks", icon: CalendarCheck, group: "Main" },
   { href: "/reports", label: "Reports", icon: BarChart3, group: "Admin", admin: true },
   { href: "/import-export", label: "Import / Export", icon: Upload, group: "Admin", admin: true },
+  { href: "/deployment", label: "Deployment", icon: ClipboardCheck, group: "Admin", admin: true },
   { href: "/profiles", label: "Profiles", icon: ShieldCheck, group: "Admin", admin: true },
   { href: "/activity", label: "Activity Log", icon: History, group: "System" },
   { href: "/settings", label: "Settings", icon: Settings, group: "System" },
@@ -212,6 +215,7 @@ function Shell({ auth, refreshAuth }: { auth: AuthState; refreshAuth: () => Prom
             <Route path="/activity" element={<ResourcePage resource="activity" profile={profile} />} />
             <Route path="/reports" element={<ReportsPage />} />
             <Route path="/import-export" element={<ImportExportPage />} />
+            <Route path="/deployment" element={<DeploymentPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
@@ -587,6 +591,36 @@ function ResetProfile() {
 function ReportsPage() {
   const { data } = useQuery({ queryKey: ["reports-summary"], queryFn: () => api<{ leads: number; bookings: number; revenue: number }>("/api/reports/summary") });
   return <><PageHeader title="Reports" description="Admin reporting for revenue, conversion, bookings, and follow-up performance." /><section className="stats compact"><div className="stat"><span>Total leads</span><b>{data?.leads ?? "-"}</b><small>All profiles</small></div><div className="stat"><span>Bookings</span><b>{data?.bookings ?? "-"}</b><small>All trips</small></div><div className="stat"><span>Revenue</span><b>{data ? `$${data.revenue.toLocaleString()}` : "-"}</b><small>Recorded payments</small></div></section><div className="card">Detailed report endpoints are available for leads by source, revenue by profile, package bookings, and follow-up completion.</div></>;
+}
+
+function DeploymentPage() {
+  const { data, isLoading, error } = useQuery({ queryKey: ["deployment-checklist"], queryFn: () => api<DeploymentChecklist>("/api/deployment/checklist") });
+  if (error) return <ErrorState error={error} />;
+  if (isLoading || !data) return <Loading />;
+  const sections = Array.from(new Set(data.items.map((item) => item.section)));
+  return (
+    <>
+      <PageHeader title="Deployment checklist" description="Production readiness for hosting, database, email, storage, auth, and release safety." />
+      <section className="stats compact">
+        <div className="stat"><span>Ready</span><b>{data.summary.ready}</b><small>{data.summary.total} checks</small></div>
+        <div className="stat"><span>Blocking</span><b>{data.summary.blocking}</b><small>Must be fixed</small></div>
+        <div className="stat"><span>Warnings</span><b>{data.summary.warnings}</b><small>Review before launch</small></div>
+      </section>
+      <section className="deploy-grid">
+        {sections.map((section) => <div className="card deploy-card" key={section}><div className="card-header"><div className="card-title">{section}</div></div>{data.items.filter((item) => item.section === section).map((item) => <div className="deploy-row" key={item.label}><span className={`deploy-check ${item.status}`} /> <div><b>{item.label}</b><p>{item.detail}</p></div><em className={`chip ${deploymentChip(item.status)}`}>{item.status}</em></div>)}</div>)}
+      </section>
+      <section className="card deploy-steps">
+        <div className="card-header"><div className="card-title">Release commands</div></div>
+        {["npm run build", "npx prisma migrate deploy", "npx prisma generate", "npm run start"].map((command) => <code key={command}>{command}</code>)}
+      </section>
+    </>
+  );
+}
+
+function deploymentChip(status: DeploymentItem["status"]) {
+  if (status === "ready") return "chip-green";
+  if (status === "warning") return "chip-amber";
+  return "chip-red";
 }
 
 function DetailPage({ resource }: { resource: string }) {

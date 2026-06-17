@@ -53,6 +53,19 @@ function sendCsv(res: express.Response, fileName: string, rows: Record<string, u
   res.send(csv);
 }
 
+function checklistStatus(ok: boolean, warning = false) {
+  if (ok) return "ready";
+  return warning ? "warning" : "missing";
+}
+
+function envPresent(name: string) {
+  return Boolean(process.env[name]?.trim());
+}
+
+function deploymentItem(section: string, label: string, ok: boolean, detail: string, warning = false) {
+  return { section, label, status: checklistStatus(ok, warning), detail };
+}
+
 function timelineDate(value: Date) {
   return value.toISOString();
 }
@@ -837,6 +850,41 @@ app.get("/api/reports/summary", asyncRoute(async (req, res) => {
     db.task.groupBy({ by: ["status"], _count: true }),
   ]);
   res.json({ leads, bookings, revenue: Number(payments._sum.amountPaid ?? 0), tasks });
+}));
+
+app.get("/api/deployment/checklist", asyncRoute(async (req, res) => {
+  await requireAdmin(req);
+  const db = getPrisma();
+  let databaseReady = false;
+  try {
+    await db.$queryRaw`SELECT 1`;
+    databaseReady = true;
+  } catch {
+    databaseReady = false;
+  }
+  const sessionSecret = process.env.SESSION_SECRET ?? "";
+  const isProduction = process.env.NODE_ENV === "production";
+  const items = [
+    deploymentItem("Environment", "Database URL", envPresent("DATABASE_URL"), "Postgres connection string is configured."),
+    deploymentItem("Environment", "Direct database URL", envPresent("DIRECT_URL"), "Direct migration connection is configured.", true),
+    deploymentItem("Environment", "Application URL", envPresent("APP_URL"), "Public CRM URL is set for email links and redirects.", true),
+    deploymentItem("Security", "Session secret", sessionSecret.length >= 32, "SESSION_SECRET is at least 32 characters."),
+    deploymentItem("Security", "Allowed email domain", envPresent("ALLOWED_EMAIL_DOMAIN"), "Login is restricted to the company email domain."),
+    deploymentItem("Database", "Prisma connection", databaseReady, databaseReady ? "Database responded to a live health query." : "Database query failed."),
+    deploymentItem("Storage", "Supabase URL", envPresent("SUPABASE_URL"), "Supabase project URL is configured."),
+    deploymentItem("Storage", "Supabase service key", envPresent("SUPABASE_SERVICE_ROLE_KEY"), "Service role key is available for protected uploads."),
+    deploymentItem("Storage", "Storage bucket", envPresent("SUPABASE_STORAGE_BUCKET"), "CRM file bucket name is configured."),
+    deploymentItem("Email", "Resend API key", envPresent("RESEND_API_KEY"), "OTP email provider key is configured."),
+    deploymentItem("Email", "OTP sender", envPresent("OTP_FROM_EMAIL"), "Sender identity is configured."),
+    deploymentItem("Email", "Profile reset email", envPresent("PROFILE_RESET_EMAIL"), "Password reset owner email is configured.", true),
+    deploymentItem("Release", "Production runtime", isProduction, isProduction ? "NODE_ENV is production." : "Set NODE_ENV=production on the deployed server.", true),
+    deploymentItem("Release", "Fixed OTP disabled", process.env.USE_FIXED_DEV_OTP !== "true", "Development fixed OTP is disabled."),
+    deploymentItem("Release", "Demo seed disabled", process.env.SEED_DEMO_DATA !== "true", "Demo seed flag is disabled."),
+  ];
+  const ready = items.filter((item) => item.status === "ready").length;
+  const blocking = items.filter((item) => item.status === "missing").length;
+  const warnings = items.filter((item) => item.status === "warning").length;
+  res.json({ items, summary: { ready, blocking, warnings, total: items.length } });
 }));
 
 for (const name of ["leads-by-profile", "conversion-rate", "revenue-by-profile", "bookings-by-package", "leads-by-source", "followup-completion"] as const) {
