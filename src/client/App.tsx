@@ -1,4 +1,4 @@
-import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { BarChart3, Bot, Building2, CalendarCheck, CircleDollarSign, ClipboardCheck, ClipboardList, History, LayoutDashboard, LogOut, Mail, PackageOpen, Plane, Search, Send, Settings, ShieldCheck, Upload, Users } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
@@ -37,6 +37,17 @@ type DetailResponse = {
   timeline?: { type: string; title: string; meta: string; date: string; tone: string }[];
   activity: { message: string; profile: string; date: string }[];
 };
+type SettingsResponse = {
+  isAdmin: boolean;
+  general: { profileName: string; email: string; role: string; lastLogin: string; appVersion: string; environment: string };
+  values: Record<string, string | number | boolean>;
+  safeConfig: Record<string, string | number>;
+  lists: Record<string, string[]>;
+  health: { name: string; status: string; detail: string }[];
+  profiles: { id: string; name: string; role: string; status: string; lastActivity: string; leads: number; bookings: number }[];
+  auditLogs: { action: string; profile: string; entity: string; date: string; details: string }[];
+};
+type SettingsField = { key: string; label: string; type: "text" | "number" | "select" | "toggle"; options?: string[] };
 
 const nav = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, group: "Main" },
@@ -226,7 +237,7 @@ function Shell({ auth, refreshAuth }: { auth: AuthState; refreshAuth: () => Prom
             <Route path="/reports" element={<ReportsPage />} />
             <Route path="/import-export" element={<ImportExportPage />} />
             <Route path="/deployment" element={<DeploymentPage />} />
-            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/settings" element={<SettingsPage auth={auth} refreshAuth={refreshAuth} />} />
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </section>
@@ -819,8 +830,242 @@ function ImportExportPage() {
   );
 }
 
-function SettingsPage() {
-  return <><PageHeader title="Settings" description="Environment and integration health." /><div className="settings"><div>Supabase Postgres</div><b>Connected through Prisma</b><div>Resend</div><b>OTP email enabled</b><div>Runtime</div><b>Vite React + Express API</b></div></>;
+const settingsTabs = [
+  { id: "general", label: "General", admin: false },
+  { id: "company", label: "Company", admin: true },
+  { id: "profiles", label: "Profiles & Permissions", admin: true },
+  { id: "leads", label: "Leads", admin: true },
+  { id: "bookings", label: "Bookings", admin: true },
+  { id: "payments", label: "Payments", admin: true },
+  { id: "packages", label: "Packages", admin: true },
+  { id: "tasks", label: "Tasks", admin: false },
+  { id: "ai", label: "AI Chatbot", admin: false },
+  { id: "email", label: "Email & OTP", admin: true },
+  { id: "import", label: "Import / Export", admin: true },
+  { id: "security", label: "Security", admin: true },
+  { id: "health", label: "System Health", admin: false },
+  { id: "audit", label: "Audit Logs", admin: true },
+] as const;
+
+const settingsFields: Record<string, SettingsField[]> = {
+  company: [
+    { key: "company.name", label: "Company name", type: "text" },
+    { key: "company.crmName", label: "CRM display name", type: "text" },
+    { key: "company.emailDomain", label: "Company email domain", type: "text" },
+    { key: "company.crmDomain", label: "CRM domain", type: "text" },
+    { key: "company.phone", label: "Company phone", type: "text" },
+    { key: "company.address", label: "Company address", type: "text" },
+    { key: "company.currency", label: "Default currency", type: "select", options: ["EGP", "USD", "EUR", "SAR", "AED"] },
+    { key: "company.timezone", label: "Default timezone", type: "select", options: ["Africa/Cairo", "UTC", "Europe/London", "Asia/Dubai", "Asia/Riyadh"] },
+  ],
+  leads: [
+    { key: "leads.autoAssign", label: "Auto-assign leads", type: "toggle" },
+    { key: "leads.duplicateDetection", label: "Duplicate detection by phone/email", type: "toggle" },
+    { key: "leads.requireLostReason", label: "Require reason when lead is Lost", type: "toggle" },
+  ],
+  bookings: [
+    { key: "bookings.idFormat", label: "Booking ID format", type: "text" },
+    { key: "bookings.taxFee", label: "Default tax/service fee", type: "number" },
+    { key: "bookings.adminCancelApproval", label: "Require admin approval for cancellation", type: "toggle" },
+  ],
+  payments: [
+    { key: "payments.allowPartial", label: "Allow partial payments", type: "toggle" },
+    { key: "payments.requireReceipt", label: "Require payment receipt upload", type: "toggle" },
+    { key: "payments.adminConfirmation", label: "Require admin confirmation for payments", type: "toggle" },
+  ],
+  packages: [
+    { key: "packages.salesCanCreate", label: "Allow sales profiles to create packages", type: "toggle" },
+    { key: "packages.adminApproval", label: "Require admin approval for publishing", type: "toggle" },
+    { key: "packages.defaultCapacity", label: "Default package capacity", type: "number" },
+  ],
+  tasks: [
+    { key: "tasks.defaultFollowUpTime", label: "Default follow-up time", type: "text" },
+    { key: "tasks.overdueWarning", label: "Overdue task warning", type: "toggle" },
+    { key: "tasks.dailySummary", label: "Daily task summary", type: "toggle" },
+    { key: "tasks.dashboardOverdue", label: "Show overdue tasks on dashboard", type: "toggle" },
+  ],
+  ai: [
+    { key: "ai.enabled", label: "AI chatbot enabled", type: "toggle" },
+    { key: "ai.crmAccess", label: "Allow AI to access CRM data", type: "toggle" },
+    { key: "ai.summarizeLeads", label: "Allow lead summaries", type: "toggle" },
+    { key: "ai.followUpMessages", label: "Generate follow-up messages", type: "toggle" },
+    { key: "ai.packageDescriptions", label: "Generate package descriptions", type: "toggle" },
+    { key: "ai.chatHistory", label: "Save chat history", type: "toggle" },
+    { key: "ai.dailyLimit", label: "Daily usage limit per profile", type: "number" },
+  ],
+  import: [
+    { key: "import.duplicates", label: "Duplicate handling", type: "select", options: ["skip", "update", "create"] },
+  ],
+  security: [
+    { key: "security.sessionTimeout", label: "Session timeout", type: "text" },
+    { key: "security.profileInactivityLock", label: "Require profile password after inactivity", type: "toggle" },
+    { key: "security.adminSensitiveConfirm", label: "Admin confirmation for sensitive actions", type: "toggle" },
+  ],
+  audit: [
+    { key: "audit.trackLeadChanges", label: "Track lead changes", type: "toggle" },
+    { key: "audit.trackBookingChanges", label: "Track booking changes", type: "toggle" },
+    { key: "audit.trackPaymentChanges", label: "Track payment changes", type: "toggle" },
+    { key: "audit.trackExports", label: "Track exports", type: "toggle" },
+    { key: "audit.trackProfileUnlocks", label: "Track profile unlocks", type: "toggle" },
+    { key: "audit.trackAiUsage", label: "Track AI usage", type: "toggle" },
+    { key: "audit.trackDeletedRecords", label: "Track deleted records", type: "toggle" },
+  ],
+};
+
+function SettingsPage({ auth, refreshAuth }: { auth: AuthState; refreshAuth: () => Promise<void> }) {
+  const navigate = useNavigate();
+  const { data, isLoading, error, refetch } = useQuery({ queryKey: ["settings"], queryFn: () => api<SettingsResponse>("/api/settings") });
+  const [active, setActive] = useState("general");
+  const [draft, setDraft] = useState<Record<string, string | number | boolean>>({});
+  const [saving, setSaving] = useState(false);
+  const [toast, setToast] = useState("");
+  const [confirm, setConfirm] = useState<{ title: string; body: string; action: () => void } | null>(null);
+
+  useEffect(() => { if (data) setDraft(data.values); }, [data]);
+  useEffect(() => {
+    if (data && settingsTabs.find((tab) => tab.id === active)?.admin && !data.isAdmin) setActive("general");
+  }, [active, data]);
+
+  if (error) return <ErrorState error={error} />;
+  if (isLoading || !data) return <><PageHeader title="Settings" description="Loading workspace controls." /><Loading /></>;
+
+  const tabs = settingsTabs.filter((tab) => !tab.admin || data.isAdmin);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(data.values);
+  const canEdit = data.isAdmin;
+
+  function updateValue(key: string, value: string | number | boolean) {
+    setDraft((current) => ({ ...current, [key]: value }));
+  }
+
+  async function save() {
+    setSaving(true);
+    try {
+      const result = await api<{ values: Record<string, string | number | boolean> }>("/api/settings", { method: "PATCH", body: JSON.stringify({ updates: draft }) });
+      setDraft(result.values);
+      await refetch();
+      setToast("Settings saved.");
+    } catch (err) {
+      setToast(err instanceof Error ? err.message : "Could not save settings.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function signOut() {
+    await postJson("/api/auth/signout", {});
+    await refreshAuth();
+    navigate("/");
+  }
+
+  return (
+    <>
+      <PageHeader title="Settings" description="Workspace controls, safe integration statuses, permissions, and system health." />
+      {toast && <div className="toast" onAnimationEnd={() => setToast("")}>{toast}</div>}
+      <section className="settings-shell">
+        <aside className="settings-menu">
+          {tabs.map((tab) => <button key={tab.id} className={active === tab.id ? "active" : ""} onClick={() => setActive(tab.id)}>{tab.label}</button>)}
+        </aside>
+        <main className="settings-content">
+          {active === "general" && <SettingsGeneral data={data} auth={auth} onLock={() => navigate("/profiles")} onSignOut={() => setConfirm({ title: "Sign out?", body: "This will end the current account session on this device.", action: signOut })} />}
+          {active === "company" && <EditableSettings title="Company settings" description="Brand, domain, currency, and timezone defaults." fields={settingsFields.company} values={draft} canEdit={canEdit} onChange={updateValue} extra={<LogoUploadStub />} />}
+          {active === "profiles" && <ProfilesSettings data={data} />}
+          {active === "leads" && <EditableSettings title="Leads settings" description="Sources, statuses, assignment, duplicates, and lead quality controls." fields={settingsFields.leads} values={draft} canEdit={canEdit} onChange={updateValue} extra={<ListCard title="Lead lists" lists={[["Sources", data.lists.leadSources], ["Statuses", data.lists.leadStatuses]]} />} />}
+          {active === "bookings" && <EditableSettings title="Bookings settings" description="Booking statuses, payment statuses, booking ID format, and approval rules." fields={settingsFields.bookings} values={draft} canEdit={canEdit} onChange={updateValue} extra={<ListCard title="Booking lists" lists={[["Booking statuses", data.lists.bookingStatuses], ["Payment statuses", data.lists.paymentStatuses], ["Cancellation reasons", ["Client request", "Payment issue", "Date unavailable", "Other"]]]} />} />}
+          {active === "payments" && <EditableSettings title="Payments settings" description="Payment methods, receipts, confirmations, and edit/delete controls." fields={settingsFields.payments} values={draft} canEdit={canEdit} onChange={updateValue} extra={<ListCard title="Payment methods" lists={[["Methods", data.lists.paymentMethods], ["Permissions", ["Admin can delete payments", "Accounting can edit payments", "Sales can view assigned payments"]]]} />} />}
+          {active === "packages" && <EditableSettings title="Packages settings" description="Destinations, categories, publishing controls, and default package values." fields={settingsFields.packages} values={draft} canEdit={canEdit} onChange={updateValue} extra={<ListCard title="Package lists" lists={[["Categories", data.lists.packageCategories], ["Statuses", data.lists.packageStatuses], ["Destinations", ["Egypt", "Turkey", "Dubai", "Saudi Arabia", "Europe"]]]} />} />}
+          {active === "tasks" && <EditableSettings title="Tasks settings" description="Follow-up defaults, reminders, overdue handling, and task visibility." fields={settingsFields.tasks} values={draft} canEdit={canEdit} onChange={updateValue} extra={<ListCard title="Task lists" lists={[["Priorities", data.lists.taskPriorities], ["Statuses", data.lists.taskStatuses]]} />} />}
+          {active === "ai" && <EditableSettings title="AI Chatbot settings" description="Safe Onboard AI status and allowed CRM assistance controls." fields={settingsFields.ai} values={draft} canEdit={canEdit} onChange={updateValue} extra={<AiStatus data={data} />} />}
+          {active === "email" && <EmailSettings data={data} />}
+          {active === "import" && <EditableSettings title="Import / Export settings" description="Admin data movement controls and duplicate handling." fields={settingsFields.import} values={draft} canEdit={canEdit} onChange={updateValue} extra={<ImportExportSettings />} />}
+          {active === "security" && <EditableSettings title="Security settings" description="Safe auth policy statuses and sensitive action protections." fields={settingsFields.security} values={draft} canEdit={canEdit} onChange={updateValue} extra={<SecurityStatus data={data} />} />}
+          {active === "health" && <SystemHealth data={data} onRefresh={() => { refetch(); setToast("Health status refreshed."); }} />}
+          {active === "audit" && <EditableSettings title="Audit log settings" description="Control which operational events are tracked in the CRM activity history." fields={settingsFields.audit} values={draft} canEdit={canEdit} onChange={updateValue} extra={<AuditLogPreview logs={data.auditLogs} />} />}
+        </main>
+      </section>
+      {dirty && <div className="save-bar"><span>Unsaved settings changes</span><button className="ghost" onClick={() => setDraft(data.values)} disabled={saving}>Reset</button><button className="primary small" onClick={save} disabled={saving}>{saving ? "Saving..." : "Save changes"}</button></div>}
+      {confirm && <SettingsConfirmDialog title={confirm.title} body={confirm.body} onCancel={() => setConfirm(null)} onConfirm={() => { const action = confirm.action; setConfirm(null); action(); }} />}
+    </>
+  );
+}
+
+function SettingsGeneral({ data, auth, onLock, onSignOut }: { data: SettingsResponse; auth: AuthState; onLock: () => void; onSignOut: () => void }) {
+  return <div className="settings-stack"><SettingCard title="Account" description="Current signed-in profile and account context."><div className="settings-grid">{Object.entries(data.general).map(([key, value]) => <SettingRow key={key} label={titleCase(key.replace(/([A-Z])/g, " $1"))} value={String(value)} />)}<SettingRow label="Keep signed in" value={auth.session?.keepSignedIn ? "Enabled" : "Default session"} /></div><div className="settings-actions"><button className="ghost" onClick={onLock}>Logout from current profile</button><button className="ghost" onClick={onSignOut}>Sign out from account</button></div></SettingCard><SettingCard title="Profile security" description="Profile password changes use the existing reset OTP flow."><div className="settings-actions"><Link className="primary small" to="/profiles">Change profile password</Link></div></SettingCard>{!data.isAdmin && <AccessNote />}</div>;
+}
+
+function EditableSettings({ title, description, fields, values, canEdit, onChange, extra }: { title: string; description: string; fields: SettingsField[]; values: Record<string, string | number | boolean>; canEdit: boolean; onChange: (key: string, value: string | number | boolean) => void; extra?: ReactNode }) {
+  return <div className="settings-stack"><SettingCard title={title} description={description}><div className="settings-grid">{fields.map((field) => <SettingsInput key={field.key} field={field} value={values[field.key]} disabled={!canEdit} onChange={onChange} />)}</div>{!canEdit && <AccessNote />}</SettingCard>{extra}</div>;
+}
+
+function SettingsInput({ field, value, disabled, onChange }: { field: SettingsField; value: string | number | boolean; disabled: boolean; onChange: (key: string, value: string | number | boolean) => void }) {
+  if (field.type === "toggle") return <div className="setting-row"><div><b>{field.label}</b><span>{Boolean(value) ? "Enabled" : "Disabled"}</span></div><button className={`switch ${value ? "on" : ""}`} disabled={disabled} onClick={() => onChange(field.key, !value)} type="button"><span /></button></div>;
+  if (field.type === "select") return <label className="setting-input"><span>{field.label}</span><select value={String(value ?? "")} disabled={disabled} onChange={(event: ChangeEvent<HTMLSelectElement>) => onChange(field.key, event.target.value)}>{field.options?.map((option) => <option key={option} value={option}>{titleCase(option)}</option>)}</select></label>;
+  return <label className="setting-input"><span>{field.label}</span><input type={field.type} value={String(value ?? "")} disabled={disabled} onChange={(event: ChangeEvent<HTMLInputElement>) => onChange(field.key, field.type === "number" ? Number(event.target.value) : event.target.value)} /></label>;
+}
+
+function SettingCard({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
+  return <section className="setting-card"><div className="setting-card-head"><div><h3>{title}</h3>{description && <p>{description}</p>}</div></div>{children}</section>;
+}
+
+function SettingRow({ label, value }: { label: string; value: string }) {
+  return <div className="setting-row"><div><b>{label}</b><span>{value}</span></div></div>;
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const normalized = status.toLowerCase();
+  const tone = normalized.includes("connected") || normalized.includes("configured") || normalized.includes("production") ? "ready" : normalized.includes("missing") || normalized.includes("failed") ? "missing" : "warning";
+  return <span className={`status-badge ${tone}`}>{status}</span>;
+}
+
+function AccessNote() {
+  return <div className="access-note">Limited access. Only the nesma admin profile can change admin settings.</div>;
+}
+
+function ListCard({ title, lists }: { title: string; lists: [string, string[]][] }) {
+  return <SettingCard title={title}>{lists.map(([label, items]) => <div className="list-row" key={label}><b>{label}</b><div>{items.map((item) => <span key={item}>{item}</span>)}</div></div>)}</SettingCard>;
+}
+
+function ProfilesSettings({ data }: { data: SettingsResponse }) {
+  return <div className="settings-stack"><SettingCard title="Profile management" description="Admin overview of profiles, work ownership, and actions."><div className="settings-actions"><button className="primary small">Create profile</button><button className="ghost">Transfer work</button></div><div className="profile-settings-table">{data.profiles.map((profile) => <div className="profile-settings-row" key={profile.id}><b>{profile.name}</b><span>{profile.role}</span><span>{profile.status}</span><span>{profile.lastActivity}</span><span>{profile.leads} leads</span><span>{profile.bookings} bookings</span><div><button className="ghost">Edit</button><button className="ghost">Reset</button></div></div>)}</div></SettingCard><PermissionMatrix roles={data.lists.roles} permissions={data.lists.permissions} /></div>;
+}
+
+function PermissionMatrix({ roles, permissions }: { roles: string[]; permissions: string[] }) {
+  return <SettingCard title="Permission matrix" description="Role capability overview for CRM modules."><div className="permission-grid"><div />{roles.map((role) => <b key={role}>{role}</b>)}{permissions.map((permission) => <div className="permission-row" key={permission}><span>{permission}</span>{roles.map((role) => <span className={role === "Admin" || (role === "Manager" && !permission.toLowerCase().includes("profiles")) ? "allowed" : ""} key={`${permission}-${role}`}>{role === "Viewer" ? "-" : "Yes"}</span>)}</div>)}</div></SettingCard>;
+}
+
+function AiStatus({ data }: { data: SettingsResponse }) {
+  return <SettingCard title="AI connection" description="Safe status only. API keys are never displayed."><div className="health-grid"><HealthStatusCard name="AI Provider" status={data.safeConfig.aiKey === "Configured" ? "Connected" : "Missing"} detail={`Provider: ${data.safeConfig.aiProvider}`} /><HealthStatusCard name="API Key" status={String(data.safeConfig.aiKey)} detail="Secret value hidden." /><HealthStatusCard name="Model" status="Configured" detail={String(data.safeConfig.aiModel)} /></div></SettingCard>;
+}
+
+function EmailSettings({ data }: { data: SettingsResponse }) {
+  return <div className="settings-stack"><SettingCard title="Email & OTP" description="OTP policy and safe Resend status."><div className="settings-grid"><SettingRow label="OTP sender email" value={String(data.safeConfig.otpSender)} /><SettingRow label="OTP expiry time" value={String(data.safeConfig.otpExpiry)} /><SettingRow label="OTP resend cooldown" value={String(data.safeConfig.otpResendCooldown)} /><SettingRow label="Maximum OTP attempts" value={String(data.safeConfig.maxOtpAttempts)} /><SettingRow label="Allowed login domain" value={String(data.safeConfig.allowedDomain)} /><div className="setting-row"><div><b>Resend</b><span>Secret key hidden</span></div><StatusBadge status={String(data.safeConfig.resend)} /></div></div></SettingCard></div>;
+}
+
+function ImportExportSettings() {
+  return <SettingCard title="Data movement" description="Existing import/export tools remain in the Import / Export module."><div className="settings-actions"><Link className="ghost" to="/import-export">Open import/export</Link><a className="ghost" href="/api/export/leads?format=csv">Export leads</a><a className="ghost" href="/api/export/bookings?format=csv">Export bookings</a><a className="ghost" href="/api/export/payments?format=csv">Export payments</a></div></SettingCard>;
+}
+
+function SecurityStatus({ data }: { data: SettingsResponse }) {
+  return <SettingCard title="Safe security status" description="Sensitive keys and database URLs are never exposed."><div className="health-grid"><HealthStatusCard name="Allowed email domain" status="Configured" detail={String(data.safeConfig.allowedDomain)} /><HealthStatusCard name="Session secret" status={String(data.safeConfig.sessionSecret)} detail="Secret value hidden." /><HealthStatusCard name="OTP rate limit" status="Configured" detail="3 requests per 15 minutes." /></div></SettingCard>;
+}
+
+function SystemHealth({ data, onRefresh }: { data: SettingsResponse; onRefresh: () => void }) {
+  return <div className="settings-stack"><SettingCard title="System health" description={`Last checked: ${new Date().toLocaleString()}`}><div className="settings-actions"><button className="primary small" onClick={onRefresh}>Refresh health check</button><button className="ghost" onClick={onRefresh}>Test AI</button><button className="ghost" onClick={onRefresh}>Test Resend</button><button className="ghost" onClick={onRefresh}>Test Storage</button></div><div className="health-grid">{data.health.map((item) => <HealthStatusCard key={item.name} {...item} />)}</div></SettingCard></div>;
+}
+
+function HealthStatusCard({ name, status, detail }: { name: string; status: string; detail: string }) {
+  return <div className="health-card"><div><b>{name}</b><p>{detail}</p></div><StatusBadge status={status} /></div>;
+}
+
+function AuditLogPreview({ logs }: { logs: SettingsResponse["auditLogs"] }) {
+  return <SettingCard title="Recent audit log preview">{logs.length ? logs.map((log) => <div className="audit-preview-row" key={`${log.action}-${log.date}-${log.details}`}><b>{log.action}</b><span>{log.profile}</span><span>{log.entity}</span><span>{log.date}</span><p>{log.details}</p></div>) : <p className="empty">No audit logs yet.</p>}</SettingCard>;
+}
+
+function LogoUploadStub() {
+  return <SettingCard title="Logo" description="Current logo preview. Upload can be connected to the existing file storage flow later."><div className="logo-preview"><img src="/onboard-logo-transparent.png" alt="Onboard Tours" /></div></SettingCard>;
+}
+
+function SettingsConfirmDialog({ title, body, onCancel, onConfirm }: { title: string; body: string; onCancel: () => void; onConfirm: () => void }) {
+  return <div className="modal-backdrop"><div className="confirm-dialog"><h3>{title}</h3><p>{body}</p><div><button className="ghost" onClick={onCancel}>Cancel</button><button className="primary small" onClick={onConfirm}>Confirm</button></div></div></div>;
 }
 
 function Loading() {

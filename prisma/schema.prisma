@@ -103,6 +103,7 @@ enum ActivityAction {
   COMPANY_CREATED
   COMPANY_UPDATED
   COMPANY_ARCHIVED
+  SETTINGS_UPDATED
 }
 
 model User {
@@ -149,10 +150,26 @@ model Profile {
   clients        Client[]
   uploadedFiles  UploadedFile[]
   companies      Company[]
+  appSettings    AppSetting[]
 
   @@unique([name])
   @@index([name])
   @@index([isAdmin])
+}
+
+model AppSetting {
+  id                 String   @id @default(cuid())
+  key                String   @unique
+  value              Json
+  category           String
+  isSecret           Boolean  @default(false)
+  updatedByProfileId String?
+  updatedByProfile   Profile? @relation(fields: [updatedByProfileId], references: [id], onDelete: SetNull)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([category])
+  @@index([updatedByProfileId])
 }
 
 model ProfilePasswordResetToken {

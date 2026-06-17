@@ -75,6 +75,73 @@ type AiSupportMessageInput = {
   text?: unknown;
 };
 
+const settingsDefaults: Record<string, { category: string; value: unknown }> = {
+  "company.name": { category: "company", value: "Onboard Tours" },
+  "company.crmName": { category: "company", value: "Onboard CRM" },
+  "company.emailDomain": { category: "company", value: "onboard-tours.com" },
+  "company.crmDomain": { category: "company", value: "onboard-crm.com" },
+  "company.phone": { category: "company", value: "" },
+  "company.address": { category: "company", value: "" },
+  "company.currency": { category: "company", value: "EGP" },
+  "company.timezone": { category: "company", value: "Africa/Cairo" },
+  "leads.autoAssign": { category: "leads", value: true },
+  "leads.duplicateDetection": { category: "leads", value: true },
+  "leads.requireLostReason": { category: "leads", value: true },
+  "bookings.idFormat": { category: "bookings", value: "ONB-2026-0001" },
+  "bookings.taxFee": { category: "bookings", value: 0 },
+  "bookings.adminCancelApproval": { category: "bookings", value: true },
+  "payments.allowPartial": { category: "payments", value: true },
+  "payments.requireReceipt": { category: "payments", value: false },
+  "payments.adminConfirmation": { category: "payments", value: false },
+  "packages.salesCanCreate": { category: "packages", value: false },
+  "packages.adminApproval": { category: "packages", value: true },
+  "packages.defaultCapacity": { category: "packages", value: 20 },
+  "tasks.defaultFollowUpTime": { category: "tasks", value: "10:00" },
+  "tasks.overdueWarning": { category: "tasks", value: true },
+  "tasks.dailySummary": { category: "tasks", value: true },
+  "tasks.dashboardOverdue": { category: "tasks", value: true },
+  "ai.enabled": { category: "ai", value: true },
+  "ai.crmAccess": { category: "ai", value: false },
+  "ai.summarizeLeads": { category: "ai", value: true },
+  "ai.followUpMessages": { category: "ai", value: true },
+  "ai.packageDescriptions": { category: "ai", value: true },
+  "ai.chatHistory": { category: "ai", value: false },
+  "ai.dailyLimit": { category: "ai", value: 50 },
+  "import.duplicates": { category: "import", value: "skip" },
+  "security.sessionTimeout": { category: "security", value: "30 days when keep signed in" },
+  "security.profileInactivityLock": { category: "security", value: true },
+  "security.adminSensitiveConfirm": { category: "security", value: true },
+  "audit.trackLeadChanges": { category: "audit", value: true },
+  "audit.trackBookingChanges": { category: "audit", value: true },
+  "audit.trackPaymentChanges": { category: "audit", value: true },
+  "audit.trackExports": { category: "audit", value: true },
+  "audit.trackProfileUnlocks": { category: "audit", value: true },
+  "audit.trackAiUsage": { category: "audit", value: true },
+  "audit.trackDeletedRecords": { category: "audit", value: true },
+};
+
+const adminSettingKeys = new Set(Object.keys(settingsDefaults).filter((key) => !key.startsWith("ai.")));
+const mutableSettingKeys = new Set(Object.keys(settingsDefaults));
+
+function isNesmaAdmin(profile: { profileName: string; isAdmin: boolean }) {
+  return profile.isAdmin && profile.profileName.trim().toLowerCase() === "nesma";
+}
+
+function envStatus(name: string) {
+  return process.env[name]?.trim() ? "Configured" : "Missing";
+}
+
+function safeStatus(ok: boolean) {
+  return ok ? "Connected" : "Failed";
+}
+
+async function settingsSnapshot(isAdmin: boolean) {
+  const keys = Object.keys(settingsDefaults).filter((key) => isAdmin || key.startsWith("ai."));
+  const rows = await getPrisma().appSetting.findMany({ where: { key: { in: keys }, isSecret: false } });
+  const values = new Map(rows.map((row) => [row.key, row.value]));
+  return Object.fromEntries(keys.map((key) => [key, values.get(key) ?? settingsDefaults[key].value]));
+}
+
 function timelineDate(value: Date) {
   return value.toISOString();
 }
@@ -262,6 +329,132 @@ app.post("/api/ai/support", asyncRoute(async (req, res) => {
   if (!response.ok) return res.status(502).json({ error: payload.error?.message ?? "Onboard AI could not answer right now." });
   const text = payload.candidates?.[0]?.content?.parts?.map((part: { text?: string }) => part.text ?? "").join("").trim();
   res.json({ message: text || "Onboard AI did not return a response." });
+}));
+
+app.get("/api/settings/health", asyncRoute(async (req, res) => {
+  await requireProfile(req);
+  let databaseReady = false;
+  try {
+    await getPrisma().$queryRaw`SELECT 1`;
+    databaseReady = true;
+  } catch {
+    databaseReady = false;
+  }
+  res.json({
+    checkedAt: new Date().toISOString(),
+    items: [
+      { name: "Supabase Postgres", status: safeStatus(databaseReady), detail: databaseReady ? "Database responded to a live query." : "Database health query failed." },
+      { name: "Prisma", status: safeStatus(databaseReady), detail: databaseReady ? "Prisma client can query the database." : "Prisma could not complete a health query." },
+      { name: "Resend", status: envStatus("RESEND_API_KEY"), detail: process.env.RESEND_API_KEY ? "OTP provider key is configured." : "OTP provider key is missing." },
+      { name: "AI API", status: process.env.GEMINI_API_KEY ? "Connected" : "Not configured", detail: process.env.GEMINI_API_KEY ? `Gemini model ${geminiModel()} is configured.` : "Gemini API key is missing." },
+      { name: "Supabase Storage", status: process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY && storageBucket() ? "Configured" : "Missing", detail: storageBucket() ? `Bucket ${storageBucket()} is selected.` : "Storage bucket is missing." },
+      { name: "Runtime", status: "Connected", detail: "Vite React + Express API" },
+      { name: "App URL", status: process.env.APP_URL ? "Configured" : "Missing", detail: process.env.APP_URL ?? "APP_URL is not set." },
+      { name: "Environment", status: process.env.NODE_ENV === "production" ? "Production" : "Development", detail: process.env.NODE_ENV ?? "development" },
+      { name: "App version", status: "Configured", detail: process.env.npm_package_version ?? "0.1.0" },
+    ],
+  });
+}));
+
+app.get("/api/settings", asyncRoute(async (req, res) => {
+  const { session, profile } = await requireProfile(req);
+  const admin = isNesmaAdmin(profile);
+  const db = getPrisma();
+  const [values, health, profiles, auditLogs] = await Promise.all([
+    settingsSnapshot(admin),
+    (async () => {
+      let databaseReady = false;
+      try {
+        await db.$queryRaw`SELECT 1`;
+        databaseReady = true;
+      } catch {
+        databaseReady = false;
+      }
+      return [
+        { name: "Supabase Postgres", status: safeStatus(databaseReady), detail: databaseReady ? "Connected through Prisma." : "Health query failed." },
+        { name: "Prisma", status: safeStatus(databaseReady), detail: "Application database client." },
+        { name: "Resend", status: envStatus("RESEND_API_KEY"), detail: "OTP email provider status." },
+        { name: "AI API", status: process.env.GEMINI_API_KEY ? "Connected" : "Not configured", detail: `Provider Gemini${process.env.GEMINI_API_KEY ? `, model ${geminiModel()}` : ""}.` },
+        { name: "Supabase Storage", status: process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY && storageBucket() ? "Configured" : "Missing", detail: "Protected upload storage." },
+        { name: "Runtime", status: "Connected", detail: "Vite React + Express API" },
+      ];
+    })(),
+    admin ? db.profile.findMany({
+      include: {
+        _count: { select: { leads: true, bookings: true } },
+        activityLogs: { orderBy: { createdAt: "desc" }, take: 1 },
+      },
+      orderBy: [{ isAdmin: "desc" }, { name: "asc" }],
+    }) : Promise.resolve([]),
+    admin ? db.activityLog.findMany({ include: { profile: true }, orderBy: { createdAt: "desc" }, take: 8 }) : Promise.resolve([]),
+  ]);
+
+  res.json({
+    isAdmin: admin,
+    general: {
+      profileName: profile.profileName,
+      email: session.email,
+      role: profile.isAdmin ? "Admin" : "User",
+      lastLogin: "Current session",
+      appVersion: process.env.npm_package_version ?? "0.1.0",
+      environment: process.env.NODE_ENV ?? "development",
+    },
+    values,
+    safeConfig: {
+      allowedDomain: allowedDomain(),
+      otpExpiry: "10 minutes",
+      otpResendCooldown: "15 minutes",
+      maxOtpAttempts: 5,
+      otpSender: process.env.OTP_FROM_EMAIL ?? "Missing",
+      resend: envStatus("RESEND_API_KEY"),
+      aiProvider: "Gemini",
+      aiModel: geminiModel(),
+      aiKey: envStatus("GEMINI_API_KEY"),
+      database: envStatus("DATABASE_URL"),
+      directDatabase: envStatus("DIRECT_URL"),
+      sessionSecret: envStatus("SESSION_SECRET"),
+    },
+    lists: {
+      leadSources: Object.values(LeadSource).map(enumLabel),
+      leadStatuses: Object.values(LeadStatus).map(enumLabel),
+      bookingStatuses: Object.values(BookingStatus).map(enumLabel),
+      paymentStatuses: Object.values(PaymentStatus).map(enumLabel),
+      paymentMethods: ["Cash", "Bank Transfer", "Instapay", "Vodafone Cash", "Card", "Other"],
+      packageCategories: ["Honeymoon", "Group Trip", "Corporate", "Luxury", "Budget", "Religious", "Adventure", "Custom"],
+      packageStatuses: ["Active", "Draft", "Archived"],
+      taskPriorities: Object.values(TaskPriority).map(enumLabel),
+      taskStatuses: Object.values(TaskStatus).map(enumLabel),
+      roles: ["Admin", "Manager", "Sales", "Accounting", "Viewer"],
+      permissions: ["View all leads", "Export data", "Delete leads", "Delete bookings", "Edit payments", "Access reports", "Access AI chatbot", "Manage packages", "Import CSV/Excel", "Manage profiles", "View activity logs"],
+    },
+    health,
+    profiles: profiles.map((item) => ({
+      id: item.id,
+      name: item.name,
+      role: item.isAdmin ? "Admin" : "Sales",
+      status: "Active",
+      lastActivity: item.activityLogs[0] ? shortDate(item.activityLogs[0].createdAt) : "-",
+      leads: item._count.leads,
+      bookings: item._count.bookings,
+    })),
+    auditLogs: auditLogs.map((item) => ({ action: enumLabel(item.action), profile: item.profile?.name ?? "-", entity: item.message.split(":")[0], date: shortDate(item.createdAt), details: item.message })),
+  });
+}));
+
+app.patch("/api/settings", asyncRoute(async (req, res) => {
+  const { profile } = await requireProfile(req);
+  if (!isNesmaAdmin(profile)) return res.status(403).json({ error: "Only the nesma admin profile can update settings." });
+  const updates = req.body?.updates && typeof req.body.updates === "object" ? req.body.updates as Record<string, unknown> : {};
+  const keys = Object.keys(updates).filter((key) => mutableSettingKeys.has(key) && !adminSettingKeys.has(key) || adminSettingKeys.has(key));
+  if (!keys.length) return res.status(400).json({ error: "No valid settings were provided." });
+  const db = getPrisma();
+  await Promise.all(keys.map((key) => db.appSetting.upsert({
+    where: { key },
+    create: { key, value: updates[key] as never, category: settingsDefaults[key].category, isSecret: false, updatedByProfileId: profile.profileId },
+    update: { value: updates[key] as never, category: settingsDefaults[key].category, isSecret: false, updatedByProfileId: profile.profileId },
+  })));
+  await db.activityLog.create({ data: { action: "SETTINGS_UPDATED", message: `${profile.profileName} updated ${keys.length} settings.`, profileId: profile.profileId, metadata: { keys } } });
+  res.json({ ok: true, values: await settingsSnapshot(true) });
 }));
 
 app.get("/api/profiles", asyncRoute(async (req, res) => {
