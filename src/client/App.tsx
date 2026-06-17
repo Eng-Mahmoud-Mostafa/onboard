@@ -183,19 +183,19 @@ function Shell({ auth, refreshAuth }: { auth: AuthState; refreshAuth: () => Prom
         <section className="content">
           <Routes>
             <Route path="/dashboard" element={<DashboardPage />} />
-            <Route path="/leads" element={<ResourcePage resource="leads" />} />
+            <Route path="/leads" element={<ResourcePage resource="leads" profile={profile} />} />
             <Route path="/leads/:id" element={<DetailPage resource="leads" />} />
-            <Route path="/clients" element={<ResourcePage resource="clients" />} />
+            <Route path="/clients" element={<ResourcePage resource="clients" profile={profile} />} />
             <Route path="/clients/:id" element={<DetailPage resource="clients" />} />
-            <Route path="/packages" element={<ResourcePage resource="packages" />} />
+            <Route path="/packages" element={<ResourcePage resource="packages" profile={profile} />} />
             <Route path="/packages/:id" element={<DetailPage resource="packages" />} />
-            <Route path="/bookings" element={<ResourcePage resource="bookings" />} />
+            <Route path="/bookings" element={<ResourcePage resource="bookings" profile={profile} />} />
             <Route path="/bookings/:id" element={<DetailPage resource="bookings" />} />
-            <Route path="/payments" element={<ResourcePage resource="payments" />} />
+            <Route path="/payments" element={<ResourcePage resource="payments" profile={profile} />} />
             <Route path="/payments/:id" element={<DetailPage resource="payments" />} />
-            <Route path="/tasks" element={<ResourcePage resource="tasks" />} />
+            <Route path="/tasks" element={<ResourcePage resource="tasks" profile={profile} />} />
             <Route path="/tasks/:id" element={<DetailPage resource="tasks" />} />
-            <Route path="/activity" element={<ResourcePage resource="activity" />} />
+            <Route path="/activity" element={<ResourcePage resource="activity" profile={profile} />} />
             <Route path="/reports" element={<ReportsPage />} />
             <Route path="/import-export" element={<ImportExportPage />} />
             <Route path="/settings" element={<SettingsPage />} />
@@ -228,7 +228,7 @@ function DashboardPage() {
   );
 }
 
-function ResourcePage({ resource }: { resource: keyof typeof resourceConfig }) {
+function ResourcePage({ resource, profile }: { resource: keyof typeof resourceConfig; profile: NonNullable<AuthState["profile"]> }) {
   const config = resourceConfig[resource];
   const navigate = useNavigate();
   const [q, setQ] = useState("");
@@ -237,18 +237,33 @@ function ResourcePage({ resource }: { resource: keyof typeof resourceConfig }) {
   const [confirming, setConfirming] = useState<Record<string, unknown> | null>(null);
   const debounced = useDebouncedValue(q, 350);
   const { data: rows, isLoading, error } = useQuery({ queryKey: [resource, debounced, refresh], queryFn: () => api<ResourceResponse>(`/api/${resource}?q=${encodeURIComponent(debounced)}`) });
-  const canCreate = resource !== "activity";
-  const canEdit = resource !== "activity";
+  const canCreate = canCreateResource(resource, profile);
+  const canImport = profile.isAdmin && (resource === "leads" || resource === "tasks");
+  const showActions = resource !== "activity" && (profile.isAdmin || resource !== "packages");
   if (error) return <ErrorState error={error} />;
   return (
     <>
       <PageHeader title={config.title} description={config.description} action={canCreate ? <CreateDrawer resource={resource} onDone={() => setRefresh((x) => x + 1)} /> : undefined} />
-      <div className="toolbar"><input value={q} onChange={(event) => setQ(event.target.value)} placeholder="Search..." />{resource === "leads" || resource === "tasks" ? <ImportExcel type={resource} onDone={() => setRefresh((x) => x + 1)} /> : null}</div>
-      {rows && !isLoading ? <><DataTable headers={canEdit ? [...config.headers, "Actions"] : config.headers} labels={config.labels} rows={rows.rows} resource={resource} onEdit={canEdit ? setEditing : undefined} onDelete={canEdit ? setConfirming : undefined} onOpen={(row) => row.id && navigate(`/${resource}/${row.id}`)} /><PaginationMeta rows={rows} /></> : <Loading />}
+      <div className="toolbar"><input value={q} onChange={(event) => setQ(event.target.value)} placeholder="Search..." />{canImport ? <ImportExcel type={resource} onDone={() => setRefresh((x) => x + 1)} /> : null}</div>
+      {rows && !isLoading ? <><DataTable headers={showActions ? [...config.headers, "Actions"] : config.headers} labels={config.labels} rows={rows.rows} resource={resource} onEdit={showActions ? setEditing : undefined} onDelete={showActions ? setConfirming : undefined} canManageRow={(row) => canManageRow(resource, row, profile)} onOpen={(row) => row.id && navigate(`/${resource}/${row.id}`)} /><PaginationMeta rows={rows} /></> : <Loading />}
       {editing && <RecordForm resource={resource} initial={editing} onClose={() => setEditing(null)} onDone={() => setRefresh((x) => x + 1)} />}
       {confirming && <ConfirmDialog resource={resource} row={confirming} onClose={() => setConfirming(null)} onDone={() => setRefresh((x) => x + 1)} />}
     </>
   );
+}
+
+function canCreateResource(resource: keyof typeof resourceConfig, profile: NonNullable<AuthState["profile"]>) {
+  if (resource === "activity") return false;
+  if (resource === "packages") return profile.isAdmin;
+  return true;
+}
+
+function canManageRow(resource: keyof typeof resourceConfig, row: Record<string, unknown>, profile: NonNullable<AuthState["profile"]>) {
+  if (resource === "activity") return false;
+  if (profile.isAdmin) return true;
+  if (resource === "packages") return false;
+  const ownerId = resource === "payments" ? row.recordedById : row.assignedProfileId;
+  return ownerId === profile.profileId;
 }
 
 function useDebouncedValue(value: string, delay: number) {
@@ -268,8 +283,12 @@ function ErrorState({ error }: { error: unknown }) {
   return <div className="error">{error instanceof Error ? error.message : "Something went wrong."}</div>;
 }
 
-function DataTable({ headers, labels, rows, resource, onEdit, onDelete, onOpen }: { headers: readonly string[]; labels: readonly string[]; rows: Record<string, unknown>[]; resource?: string; onEdit?: (row: Record<string, unknown>) => void; onDelete?: (row: Record<string, unknown>) => void; onOpen?: (row: Record<string, unknown>) => void }) {
-  return <div className="table-wrap"><table><thead><tr>{headers.map((header) => <th key={header}>{header}</th>)}</tr></thead><tbody>{rows.map((row, index) => <tr key={index} onClick={() => onOpen?.(row)}>{labels.map((label) => <td key={label}>{renderCell(label, row[label])}</td>)}{onEdit && <td><div className="table-actions"><button className="table-action" type="button" onClick={(event) => { event.stopPropagation(); onEdit(row); }}>Edit</button>{onDelete && <button className="table-action danger" type="button" onClick={(event) => { event.stopPropagation(); onDelete(row); }}>{dangerLabel(resource)}</button>}</div></td>}</tr>)}</tbody></table>{!rows.length && <p className="empty">No records yet.</p>}</div>;
+function DataTable({ headers, labels, rows, resource, onEdit, onDelete, onOpen, canManageRow }: { headers: readonly string[]; labels: readonly string[]; rows: Record<string, unknown>[]; resource?: string; onEdit?: (row: Record<string, unknown>) => void; onDelete?: (row: Record<string, unknown>) => void; onOpen?: (row: Record<string, unknown>) => void; canManageRow?: (row: Record<string, unknown>) => boolean }) {
+  const hasActions = Boolean(onEdit || onDelete);
+  return <div className="table-wrap"><table><thead><tr>{headers.map((header) => <th key={header}>{header}</th>)}</tr></thead><tbody>{rows.map((row, index) => {
+    const canManage = canManageRow ? canManageRow(row) : true;
+    return <tr key={index} onClick={() => onOpen?.(row)}>{labels.map((label) => <td key={label}>{renderCell(label, row[label])}</td>)}{hasActions && <td>{canManage && <div className="table-actions">{onEdit && <button className="table-action" type="button" onClick={(event) => { event.stopPropagation(); onEdit(row); }}>Edit</button>}{onDelete && <button className="table-action danger" type="button" onClick={(event) => { event.stopPropagation(); onDelete(row); }}>{dangerLabel(resource)}</button>}</div>}</td>}</tr>;
+  })}</tbody></table>{!rows.length && <p className="empty">No records yet.</p>}</div>;
 }
 
 function dangerLabel(resource?: string) {

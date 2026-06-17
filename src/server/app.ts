@@ -237,13 +237,14 @@ app.post("/api/profiles/reset/confirm", asyncRoute(async (req, res) => {
 }));
 
 app.get("/api/lookups", asyncRoute(async (req, res) => {
-  await requireProfile(req);
+  const { profile } = await requireProfile(req);
   const db = getPrisma();
+  const assignedWhere = assignedFilter(profile);
   const [profiles, clients, packages, bookings] = await Promise.all([
-    db.profile.findMany({ select: { id: true, name: true }, orderBy: { name: "asc" } }),
-    db.client.findMany({ select: { id: true, fullName: true }, orderBy: { fullName: "asc" } }),
+    profile.isAdmin ? db.profile.findMany({ select: { id: true, name: true }, orderBy: { name: "asc" } }) : db.profile.findMany({ where: { id: profile.profileId }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
+    db.client.findMany({ where: profile.isAdmin ? {} : { assignedProfileId: profile.profileId }, select: { id: true, fullName: true }, orderBy: { fullName: "asc" } }),
     db.package.findMany({ where: { status: { not: "ARCHIVED" } }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
-    db.booking.findMany({ select: { id: true, bookingCode: true }, orderBy: { createdAt: "desc" }, take: 100 }),
+    db.booking.findMany({ where: assignedWhere, select: { id: true, bookingCode: true }, orderBy: { createdAt: "desc" }, take: 100 }),
   ]);
   res.json({ profiles, clients, packages, bookings });
 }));
@@ -292,9 +293,9 @@ app.get("/api/crm/:resource", asyncRoute(async (req, res) => {
   }
 
   if (resource === "clients") {
-    const where = q ? { OR: [{ fullName: { contains: q, mode: "insensitive" as const } }, { phone: { contains: q } }, { email: { contains: q, mode: "insensitive" as const } }] } : {};
+    const where = { ...assignedFilter(current.profile), ...(q ? { OR: [{ fullName: { contains: q, mode: "insensitive" as const } }, { phone: { contains: q } }, { email: { contains: q, mode: "insensitive" as const } }] } : {}) };
     const [rows, total] = await Promise.all([db.client.findMany({ where, include: { bookings: true }, orderBy: { updatedAt: "desc" }, skip, take: pageSize }), db.client.count({ where })]);
-    return paged(res, rows.map((client) => ({ id: client.id, fullName: client.fullName, name: client.fullName, phone: client.phone, email: client.email ?? "", nationality: client.nationality ?? "", passportNumber: client.passportNumber ?? "", notes: client.notes ?? "", bookings: client.bookings.length, paid: money(client.bookings.reduce((sum, booking) => sum + Number(booking.paidAmount), 0)), remaining: money(client.bookings.reduce((sum, booking) => sum + Number(booking.remainingAmount), 0)) })), total, page, pageSize);
+    return paged(res, rows.map((client) => ({ id: client.id, fullName: client.fullName, name: client.fullName, phone: client.phone, email: client.email ?? "", nationality: client.nationality ?? "", passportNumber: client.passportNumber ?? "", notes: client.notes ?? "", assignedProfileId: client.assignedProfileId ?? "", bookings: client.bookings.length, paid: money(client.bookings.reduce((sum, booking) => sum + Number(booking.paidAmount), 0)), remaining: money(client.bookings.reduce((sum, booking) => sum + Number(booking.remainingAmount), 0)) })), total, page, pageSize);
   }
 
   if (resource === "packages") {
@@ -312,7 +313,7 @@ app.get("/api/crm/:resource", asyncRoute(async (req, res) => {
   if (resource === "payments") {
     const where = { ...recordedFilter(current.profile), ...(q ? { OR: [{ clientName: { contains: q, mode: "insensitive" as const } }, { booking: { bookingCode: { contains: q, mode: "insensitive" as const } } }] } : {}) };
     const [rows, total] = await Promise.all([db.payment.findMany({ where, include: { booking: true, recordedBy: true }, orderBy: { paymentDate: "desc" }, skip, take: pageSize }), db.payment.count({ where })]);
-    return paged(res, rows.map((payment) => ({ id: payment.id, bookingId: payment.bookingId, booking: payment.booking.bookingCode, client: payment.clientName, amountPaid: payment.amountPaid.toString(), amount: money(payment.amountPaid.toString()), paymentMethod: payment.paymentMethod, method: enumLabel(payment.paymentMethod), paymentDate: payment.paymentDate.toISOString().slice(0, 10), date: shortDate(payment.paymentDate), notes: payment.notes ?? "", profile: payment.recordedBy?.name ?? "-" })), total, page, pageSize);
+    return paged(res, rows.map((payment) => ({ id: payment.id, bookingId: payment.bookingId, booking: payment.booking.bookingCode, client: payment.clientName, amountPaid: payment.amountPaid.toString(), amount: money(payment.amountPaid.toString()), paymentMethod: payment.paymentMethod, method: enumLabel(payment.paymentMethod), paymentDate: payment.paymentDate.toISOString().slice(0, 10), date: shortDate(payment.paymentDate), notes: payment.notes ?? "", recordedById: payment.recordedById ?? "", profile: payment.recordedBy?.name ?? "-" })), total, page, pageSize);
   }
 
   if (resource === "tasks") {
@@ -339,13 +340,14 @@ app.post("/api/crm/:resource", asyncRoute(async (req, res) => {
     const parsed = leadSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: `Check the lead fields: ${parsed.error.issues.map((issue) => issue.path.join(".") || issue.message).join(", ")}.` });
     const input = clean(parsed.data);
-    await db.lead.create({ data: { clientName: input.clientName, phone: input.phone, email: input.email || null, source: input.source, interestedDestination: input.interestedDestination || null, interestedPackage: input.interestedPackage, budget: input.budget, travelDate: input.travelDate ? new Date(input.travelDate) : null, travelers: input.travelers, travelersCount: input.travelers, status: input.status, assignedProfileId: input.assignedProfileId || profile.profileId, notes: input.notes || null, activityLogs: { create: { action: "LEAD_CREATED", message: `Lead created for ${input.clientName}.`, profileId: profile.profileId } } } });
+    await db.lead.create({ data: { clientName: input.clientName, phone: input.phone, email: input.email || null, source: input.source, interestedDestination: input.interestedDestination || null, interestedPackage: input.interestedPackage, budget: input.budget, travelDate: input.travelDate ? new Date(input.travelDate) : null, travelers: input.travelers, travelersCount: input.travelers, status: input.status, assignedProfileId: profile.isAdmin ? input.assignedProfileId || profile.profileId : profile.profileId, notes: input.notes || null, activityLogs: { create: { action: "LEAD_CREATED", message: `Lead created for ${input.clientName}.`, profileId: profile.profileId } } } });
   } else if (resource === "clients") {
     const parsed = clientSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "Check the client fields and try again." });
     const input = clean(parsed.data);
     await db.client.create({ data: { fullName: input.fullName, phone: input.phone, email: input.email || null, nationality: input.nationality || null, passportNumber: input.passportNumber || null, notes: input.notes || null, assignedProfileId: profile.profileId, activityLogs: { create: { action: "CLIENT_CREATED", message: `Client ${input.fullName} was added.`, profileId: profile.profileId } } } });
   } else if (resource === "packages") {
+    if (!profile.isAdmin) return res.status(403).json({ error: "Only admin profiles can manage packages." });
     const parsed = packageSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "Check the package fields and try again." });
     const input = parsed.data;
@@ -356,7 +358,7 @@ app.post("/api/crm/:resource", asyncRoute(async (req, res) => {
     if (!parsed.success) return res.status(400).json({ error: "Check the task fields and try again." });
     const input = clean(parsed.data);
     const dueAt = new Date(input.dueAt);
-    const task = await db.task.create({ data: { title: input.title, description: input.description || null, dueAt, dueDate: dueAt, priority: input.priority, status: input.status, assignedProfileId: input.assignedProfileId || profile.profileId } });
+    const task = await db.task.create({ data: { title: input.title, description: input.description || null, dueAt, dueDate: dueAt, priority: input.priority, status: input.status, assignedProfileId: profile.isAdmin ? input.assignedProfileId || profile.profileId : profile.profileId } });
     await db.activityLog.create({ data: { action: "TASK_CREATED", message: `Task created: ${task.title}`, profileId: profile.profileId, taskId: task.id } });
   } else if (resource === "bookings") {
     const parsed = bookingSchema.safeParse(req.body);
@@ -366,13 +368,16 @@ app.post("/api/crm/:resource", asyncRoute(async (req, res) => {
     const total = Number(input.totalPrice);
     const count = await db.booking.count();
     const packageItem = input.packageId ? await db.package.findUnique({ where: { id: input.packageId } }) : null;
-    await db.booking.create({ data: { bookingCode: `OB-${new Date().getFullYear()}-${String(count + 1).padStart(4, "0")}`, clientId: input.clientId, packageId: input.packageId || null, packageNameSnapshot: packageItem?.name ?? "Custom trip", travelDate: new Date(input.travelDate), travelers: input.travelers, totalPrice: total, paidAmount: paid, remainingAmount: Math.max(total - paid, 0), paymentStatus: paid <= 0 ? "UNPAID" : total - paid <= 0 ? "PAID" : "PARTIAL", bookingStatus: input.bookingStatus, assignedProfileId: input.assignedProfileId || profile.profileId, notes: input.notes || null, activityLogs: { create: { action: "BOOKING_CREATED", message: `Booking created for ${packageItem?.name ?? "custom trip"}.`, profileId: profile.profileId } } } });
+    const client = await db.client.findUnique({ where: { id: input.clientId } });
+    if (!client || (!profile.isAdmin && client.assignedProfileId !== profile.profileId)) return res.status(403).json({ error: "You can only create bookings for your assigned clients." });
+    await db.booking.create({ data: { bookingCode: `OB-${new Date().getFullYear()}-${String(count + 1).padStart(4, "0")}`, clientId: input.clientId, packageId: input.packageId || null, packageNameSnapshot: packageItem?.name ?? "Custom trip", travelDate: new Date(input.travelDate), travelers: input.travelers, totalPrice: total, paidAmount: paid, remainingAmount: Math.max(total - paid, 0), paymentStatus: paid <= 0 ? "UNPAID" : total - paid <= 0 ? "PAID" : "PARTIAL", bookingStatus: input.bookingStatus, assignedProfileId: profile.isAdmin ? input.assignedProfileId || profile.profileId : profile.profileId, notes: input.notes || null, activityLogs: { create: { action: "BOOKING_CREATED", message: `Booking created for ${packageItem?.name ?? "custom trip"}.`, profileId: profile.profileId } } } });
   } else if (resource === "payments") {
     const parsed = paymentSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "Check the payment fields and try again." });
     const input = clean(parsed.data);
     const booking = await db.booking.findUnique({ where: { id: input.bookingId }, include: { client: true } });
     if (!booking) return res.status(404).json({ error: "Booking not found." });
+    if (!profile.isAdmin && booking.assignedProfileId !== profile.profileId) return res.status(403).json({ error: "You can only record payments for your assigned bookings." });
     const newPaid = Number(booking.paidAmount) + Number(input.amountPaid);
     const total = Number(booking.totalPrice);
     await db.$transaction([
@@ -477,7 +482,7 @@ app.patch("/api/crm/:resource/:id", asyncRoute(async (req, res) => {
         travelers: input.travelers,
         travelersCount: input.travelers,
         status: input.status,
-        assignedProfileId: input.assignedProfileId || profile.profileId,
+        assignedProfileId: profile.isAdmin ? input.assignedProfileId || profile.profileId : profile.profileId,
         notes: input.notes || null,
       },
     });
@@ -508,6 +513,7 @@ app.patch("/api/crm/:resource/:id", asyncRoute(async (req, res) => {
   }
 
   if (resource === "packages") {
+    if (!profile.isAdmin) return res.status(403).json({ error: "Only admin profiles can manage packages." });
     const parsed = packageSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "Check the package fields and try again." });
     const input = parsed.data;
@@ -536,6 +542,9 @@ app.patch("/api/crm/:resource/:id", asyncRoute(async (req, res) => {
     const existing = await db.booking.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: "Booking not found." });
     if (!profile.isAdmin && existing.assignedProfileId && existing.assignedProfileId !== profile.profileId) return res.status(403).json({ error: "Forbidden" });
+    const client = await db.client.findUnique({ where: { id: input.clientId } });
+    if (!client) return res.status(404).json({ error: "Client not found." });
+    if (!profile.isAdmin && client.assignedProfileId !== profile.profileId) return res.status(403).json({ error: "You can only use your assigned clients." });
     const total = Number(input.totalPrice);
     const paid = Number(input.paidAmount ?? 0);
     const packageItem = input.packageId ? await db.package.findUnique({ where: { id: input.packageId } }) : null;
@@ -552,7 +561,7 @@ app.patch("/api/crm/:resource/:id", asyncRoute(async (req, res) => {
         remainingAmount: Math.max(total - paid, 0),
         paymentStatus: paid <= 0 ? "UNPAID" : total - paid <= 0 ? "PAID" : "PARTIAL",
         bookingStatus: input.bookingStatus,
-        assignedProfileId: input.assignedProfileId || profile.profileId,
+        assignedProfileId: profile.isAdmin ? input.assignedProfileId || profile.profileId : profile.profileId,
         notes: input.notes || null,
       },
     });
@@ -569,6 +578,7 @@ app.patch("/api/crm/:resource/:id", asyncRoute(async (req, res) => {
     if (!profile.isAdmin && existing.recordedById && existing.recordedById !== profile.profileId) return res.status(403).json({ error: "Forbidden" });
     const booking = await db.booking.findUnique({ where: { id: input.bookingId }, include: { client: true, payments: true } });
     if (!booking) return res.status(404).json({ error: "Booking not found." });
+    if (!profile.isAdmin && booking.assignedProfileId !== profile.profileId) return res.status(403).json({ error: "You can only move payments to your assigned bookings." });
     const oldBookingId = existing.bookingId;
     await db.payment.update({
       where: { id },
@@ -612,7 +622,7 @@ app.patch("/api/crm/:resource/:id", asyncRoute(async (req, res) => {
         dueDate: dueAt,
         priority: input.priority,
         status: input.status,
-        assignedProfileId: input.assignedProfileId || profile.profileId,
+        assignedProfileId: profile.isAdmin ? input.assignedProfileId || profile.profileId : profile.profileId,
       },
     });
     await db.activityLog.create({ data: { action: "TASK_CREATED", message: `Task edited: ${task.title}`, profileId: profile.profileId, taskId: task.id } });
@@ -652,6 +662,7 @@ app.delete("/api/crm/:resource/:id", asyncRoute(async (req, res) => {
   }
 
   if (resource === "packages") {
+    if (!profile.isAdmin) return res.status(403).json({ error: "Only admin profiles can archive packages." });
     const item = await db.package.findUnique({ where: { id } });
     if (!item) return res.status(404).json({ error: "Package not found." });
     const archived = await db.package.update({ where: { id }, data: { status: "ARCHIVED" } });
@@ -707,8 +718,12 @@ for (const resource of ["dashboard", "leads", "clients", "packages", "bookings",
 
 app.patch("/api/tasks/:id/complete", asyncRoute(async (req, res) => {
   const { profile } = await requireProfile(req);
-  const task = await getPrisma().task.update({ where: { id: String(req.params.id) }, data: { status: "DONE" } });
-  await getPrisma().activityLog.create({ data: { action: "TASK_COMPLETED", message: `Task completed: ${task.title}`, profileId: profile.profileId, taskId: task.id } });
+  const db = getPrisma();
+  const existing = await db.task.findUnique({ where: { id: String(req.params.id) } });
+  if (!existing) return res.status(404).json({ error: "Task not found." });
+  if (!profile.isAdmin && existing.assignedProfileId !== profile.profileId) return res.status(403).json({ error: "Forbidden" });
+  const task = await db.task.update({ where: { id: existing.id }, data: { status: "DONE" } });
+  await db.activityLog.create({ data: { action: "TASK_COMPLETED", message: `Task completed: ${task.title}`, profileId: profile.profileId, taskId: task.id } });
   res.json({ ok: true });
 }));
 
@@ -748,8 +763,12 @@ app.get("/api/export/:type", asyncRoute(async (req, res) => {
 
 app.post("/api/tasks/:id/done", asyncRoute(async (req, res) => {
   const { profile } = await requireProfile(req);
-  const task = await getPrisma().task.update({ where: { id: String(req.params.id) }, data: { status: "DONE" } });
-  await getPrisma().activityLog.create({ data: { action: "TASK_COMPLETED", message: `Task completed: ${task.title}`, profileId: profile.profileId, taskId: task.id } });
+  const db = getPrisma();
+  const existing = await db.task.findUnique({ where: { id: String(req.params.id) } });
+  if (!existing) return res.status(404).json({ error: "Task not found." });
+  if (!profile.isAdmin && existing.assignedProfileId !== profile.profileId) return res.status(403).json({ error: "Forbidden" });
+  const task = await db.task.update({ where: { id: existing.id }, data: { status: "DONE" } });
+  await db.activityLog.create({ data: { action: "TASK_COMPLETED", message: `Task completed: ${task.title}`, profileId: profile.profileId, taskId: task.id } });
   res.json({ ok: true });
 }));
 
@@ -815,6 +834,19 @@ app.post("/api/import/:type", upload.single("file"), asyncRoute(async (req, res)
 app.post("/api/files/upload", upload.single("file"), asyncRoute(async (req, res) => {
   const { profile } = await requireProfile(req);
   if (!req.file) return res.status(400).json({ error: "Choose a file to upload." });
+  const db = getPrisma();
+  const relatedBookingId = req.body.relatedBookingId || null;
+  const relatedClientId = req.body.relatedClientId || null;
+  if (relatedBookingId) {
+    const booking = await db.booking.findUnique({ where: { id: relatedBookingId } });
+    if (!booking) return res.status(404).json({ error: "Booking not found." });
+    if (!profile.isAdmin && booking.assignedProfileId !== profile.profileId) return res.status(403).json({ error: "You can only upload files to your assigned bookings." });
+  }
+  if (relatedClientId) {
+    const client = await db.client.findUnique({ where: { id: relatedClientId } });
+    if (!client) return res.status(404).json({ error: "Client not found." });
+    if (!profile.isAdmin && client.assignedProfileId !== profile.profileId) return res.status(403).json({ error: "You can only upload files to your assigned clients." });
+  }
   const bucket = storageBucket();
   const safeName = req.file.originalname.replace(/[^a-zA-Z0-9._-]+/g, "-");
   const storagePath = `${profile.profileId}/${Date.now()}-${safeName}`;
@@ -824,18 +856,18 @@ app.post("/api/files/upload", upload.single("file"), asyncRoute(async (req, res)
   });
   if (error) throw new Error(error.message);
   const { data } = getSupabase().storage.from(bucket).getPublicUrl(storagePath);
-  const file = await getPrisma().uploadedFile.create({
+  const file = await db.uploadedFile.create({
     data: {
       fileName: req.file.originalname,
       fileUrl: data.publicUrl,
       fileType: req.file.mimetype,
       fileSize: req.file.size,
-      relatedBookingId: req.body.relatedBookingId || null,
-      relatedClientId: req.body.relatedClientId || null,
+      relatedBookingId,
+      relatedClientId,
       uploadedByProfileId: profile.profileId,
     },
   });
-  await getPrisma().activityLog.create({ data: { action: "FILE_UPLOADED", message: `File uploaded: ${file.fileName}`, profileId: profile.profileId } });
+  await db.activityLog.create({ data: { action: "FILE_UPLOADED", message: `File uploaded: ${file.fileName}`, profileId: profile.profileId } });
   res.json({ ok: true, file });
 }));
 
