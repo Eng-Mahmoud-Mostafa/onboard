@@ -66,6 +66,15 @@ function deploymentItem(section: string, label: string, ok: boolean, detail: str
   return { section, label, status: checklistStatus(ok, warning), detail };
 }
 
+function geminiModel() {
+  return process.env.GEMINI_MODEL?.trim() || "gemini-2.5-flash";
+}
+
+type AiSupportMessageInput = {
+  role?: string;
+  text?: unknown;
+};
+
 function timelineDate(value: Date) {
   return value.toISOString();
 }
@@ -226,6 +235,33 @@ app.post("/api/auth/logout", (_, res) => {
   clearAuth(res);
   res.json({ ok: true });
 });
+
+app.post("/api/ai/support", asyncRoute(async (req, res) => {
+  const { profile } = await requireProfile(req);
+  const apiKey = process.env.GEMINI_API_KEY?.trim();
+  if (!apiKey) return res.status(503).json({ error: "Onboard AI is not configured yet. Add GEMINI_API_KEY on the server." });
+  const input: AiSupportMessageInput[] = Array.isArray(req.body?.messages) ? req.body.messages : [];
+  const messages = input
+    .map((message) => ({ role: message?.role === "assistant" || message?.role === "model" ? "model" : "user", text: String(message?.text ?? "").trim() }))
+    .filter((message) => message.text)
+    .slice(-12);
+  if (!messages.length) return res.status(400).json({ error: "Send a message first." });
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(geminiModel())}:generateContent`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+    body: JSON.stringify({
+      systemInstruction: {
+        parts: [{ text: `You are Onboard AI, the internal CRM support assistant for Onboard Tours. Help ${profile.profileName} use the CRM, write travel sales follow-ups, explain booking/payment/task workflows, and answer operational questions. Be concise, practical, and do not invent private CRM data that was not provided in the chat.` }],
+      },
+      contents: messages.map((message) => ({ role: message.role, parts: [{ text: message.text }] })),
+      generationConfig: { temperature: 0.4, maxOutputTokens: 800 },
+    }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) return res.status(502).json({ error: payload.error?.message ?? "Onboard AI could not answer right now." });
+  const text = payload.candidates?.[0]?.content?.parts?.map((part: { text?: string }) => part.text ?? "").join("").trim();
+  res.json({ message: text || "Onboard AI did not return a response." });
+}));
 
 app.get("/api/profiles", asyncRoute(async (req, res) => {
   res.json({ profiles: await visibleProfiles(req), session: await requireSession(req) });
@@ -924,6 +960,8 @@ app.get("/api/deployment/checklist", asyncRoute(async (req, res) => {
     deploymentItem("Email", "Resend API key", envPresent("RESEND_API_KEY"), "OTP email provider key is configured."),
     deploymentItem("Email", "OTP sender", envPresent("OTP_FROM_EMAIL"), "Sender identity is configured."),
     deploymentItem("Email", "Profile reset email", envPresent("PROFILE_RESET_EMAIL"), "Password reset owner email is configured.", true),
+    deploymentItem("AI", "Gemini API key", envPresent("GEMINI_API_KEY"), "Onboard AI server key is configured.", true),
+    deploymentItem("AI", "Gemini model", Boolean(geminiModel()), `Using ${geminiModel()} for Onboard AI.`),
     deploymentItem("Release", "Production runtime", isProduction, isProduction ? "NODE_ENV is production." : "Set NODE_ENV=production on the deployed server.", true),
     deploymentItem("Release", "Fixed OTP disabled", process.env.USE_FIXED_DEV_OTP !== "true", "Development fixed OTP is disabled."),
     deploymentItem("Release", "Demo seed disabled", process.env.SEED_DEMO_DATA !== "true", "Demo seed flag is disabled."),

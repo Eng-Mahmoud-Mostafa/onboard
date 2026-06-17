@@ -1,6 +1,6 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { BarChart3, Building2, CalendarCheck, CircleDollarSign, ClipboardCheck, ClipboardList, History, LayoutDashboard, LogOut, Mail, PackageOpen, Plane, Search, Settings, ShieldCheck, Upload, Users } from "lucide-react";
+import { BarChart3, Bot, Building2, CalendarCheck, CircleDollarSign, ClipboardCheck, ClipboardList, History, LayoutDashboard, LogOut, Mail, PackageOpen, Plane, Search, Send, Settings, ShieldCheck, Upload, Users } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { api, AuthState, postJson } from "./api";
 
@@ -27,6 +27,7 @@ type ResourceResponse = { rows: Record<string, unknown>[]; total: number; page: 
 type DeploymentItem = { section: string; label: string; status: "ready" | "warning" | "missing"; detail: string };
 type DeploymentChecklist = { items: DeploymentItem[]; summary: { ready: number; blocking: number; warnings: number; total: number } };
 type ImportPreview = { type: string; totalRows: number; validRows: number; invalidRows: number; rows: { row: number; status: "valid" | "invalid"; issues: string[]; preview: Record<string, string> }[] };
+type AiMessage = { role: "user" | "assistant"; text: string };
 type DetailResponse = {
   title: string;
   subtitle: string;
@@ -46,6 +47,7 @@ const nav = [
   { href: "/bookings", label: "Bookings", icon: Plane, group: "Main" },
   { href: "/payments", label: "Payments", icon: CircleDollarSign, group: "Main" },
   { href: "/tasks", label: "Tasks", icon: CalendarCheck, group: "Main" },
+  { href: "/onboard-ai", label: "Onboard AI", icon: Bot, group: "Main" },
   { href: "/reports", label: "Reports", icon: BarChart3, group: "Admin", admin: true },
   { href: "/import-export", label: "Import / Export", icon: Upload, group: "Admin", admin: true },
   { href: "/deployment", label: "Deployment", icon: ClipboardCheck, group: "Admin", admin: true },
@@ -213,6 +215,7 @@ function Shell({ auth, refreshAuth }: { auth: AuthState; refreshAuth: () => Prom
             <Route path="/payments/:id" element={<DetailPage resource="payments" />} />
             <Route path="/tasks" element={<ResourcePage resource="tasks" profile={profile} />} />
             <Route path="/tasks/:id" element={<DetailPage resource="tasks" />} />
+            <Route path="/onboard-ai" element={<OnboardAiPage />} />
             <Route path="/activity" element={<ResourcePage resource="activity" profile={profile} />} />
             <Route path="/reports" element={<ReportsPage />} />
             <Route path="/import-export" element={<ImportExportPage />} />
@@ -668,6 +671,49 @@ function deploymentChip(status: DeploymentItem["status"]) {
   if (status === "ready") return "chip-green";
   if (status === "warning") return "chip-amber";
   return "chip-red";
+}
+
+function OnboardAiPage() {
+  const [messages, setMessages] = useState<AiMessage[]>([{ role: "assistant", text: "Hi, I am Onboard AI. Ask me about CRM workflows, follow-ups, bookings, payments, tasks, or travel sales wording." }]);
+  const [draft, setDraft] = useState("");
+  const [isWriting, setIsWriting] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const text = draft.trim();
+    if (!text || isWriting) return;
+    const nextMessages: AiMessage[] = [...messages, { role: "user", text }];
+    setMessages(nextMessages);
+    setDraft("");
+    setError("");
+    setIsWriting(true);
+    try {
+      const result = await api<{ message: string }>("/api/ai/support", { method: "POST", body: JSON.stringify({ messages: nextMessages }) });
+      setMessages([...nextMessages, { role: "assistant", text: result.message }]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Onboard AI could not answer right now.");
+    } finally {
+      setIsWriting(false);
+    }
+  }
+
+  return (
+    <>
+      <PageHeader title="Onboard AI" description="AI support for CRM workflows, travel sales follow-ups, bookings, payments, and task operations." />
+      <section className="ai-panel">
+        <div className="ai-thread">
+          {messages.map((message, index) => <div className={`ai-message ${message.role}`} key={index}><div className="ai-avatar">{message.role === "assistant" ? "AI" : "You"}</div><div><b>{message.role === "assistant" ? "Onboard AI" : "You"}</b><p>{message.text}</p></div></div>)}
+          {isWriting && <div className="ai-writing">Onboard AI is writing...</div>}
+          {error && <p className="error">{error}</p>}
+        </div>
+        <form className="ai-compose" onSubmit={submit}>
+          <textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Ask Onboard AI..." rows={3} />
+          <button className="primary" disabled={isWriting || !draft.trim()}><Send size={15} /> Send</button>
+        </form>
+      </section>
+    </>
+  );
 }
 
 function DetailPage({ resource }: { resource: string }) {
