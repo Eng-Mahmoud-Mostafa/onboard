@@ -234,6 +234,7 @@ function ResourcePage({ resource }: { resource: keyof typeof resourceConfig }) {
   const [q, setQ] = useState("");
   const [refresh, setRefresh] = useState(0);
   const [editing, setEditing] = useState<Record<string, unknown> | null>(null);
+  const [confirming, setConfirming] = useState<Record<string, unknown> | null>(null);
   const debounced = useDebouncedValue(q, 350);
   const { data: rows, isLoading, error } = useQuery({ queryKey: [resource, debounced, refresh], queryFn: () => api<ResourceResponse>(`/api/${resource}?q=${encodeURIComponent(debounced)}`) });
   const canCreate = resource !== "activity";
@@ -243,8 +244,9 @@ function ResourcePage({ resource }: { resource: keyof typeof resourceConfig }) {
     <>
       <PageHeader title={config.title} description={config.description} action={canCreate ? <CreateDrawer resource={resource} onDone={() => setRefresh((x) => x + 1)} /> : undefined} />
       <div className="toolbar"><input value={q} onChange={(event) => setQ(event.target.value)} placeholder="Search..." />{resource === "leads" || resource === "tasks" ? <ImportExcel type={resource} onDone={() => setRefresh((x) => x + 1)} /> : null}</div>
-      {rows && !isLoading ? <><DataTable headers={canEdit ? [...config.headers, "Actions"] : config.headers} labels={config.labels} rows={rows.rows} onEdit={canEdit ? setEditing : undefined} onOpen={(row) => row.id && navigate(`/${resource}/${row.id}`)} /><PaginationMeta rows={rows} /></> : <Loading />}
+      {rows && !isLoading ? <><DataTable headers={canEdit ? [...config.headers, "Actions"] : config.headers} labels={config.labels} rows={rows.rows} resource={resource} onEdit={canEdit ? setEditing : undefined} onDelete={canEdit ? setConfirming : undefined} onOpen={(row) => row.id && navigate(`/${resource}/${row.id}`)} /><PaginationMeta rows={rows} /></> : <Loading />}
       {editing && <RecordForm resource={resource} initial={editing} onClose={() => setEditing(null)} onDone={() => setRefresh((x) => x + 1)} />}
+      {confirming && <ConfirmDialog resource={resource} row={confirming} onClose={() => setConfirming(null)} onDone={() => setRefresh((x) => x + 1)} />}
     </>
   );
 }
@@ -266,8 +268,18 @@ function ErrorState({ error }: { error: unknown }) {
   return <div className="error">{error instanceof Error ? error.message : "Something went wrong."}</div>;
 }
 
-function DataTable({ headers, labels, rows, onEdit, onOpen }: { headers: readonly string[]; labels: readonly string[]; rows: Record<string, unknown>[]; onEdit?: (row: Record<string, unknown>) => void; onOpen?: (row: Record<string, unknown>) => void }) {
-  return <div className="table-wrap"><table><thead><tr>{headers.map((header) => <th key={header}>{header}</th>)}</tr></thead><tbody>{rows.map((row, index) => <tr key={index} onClick={() => onOpen?.(row)}>{labels.map((label) => <td key={label}>{renderCell(label, row[label])}</td>)}{onEdit && <td><button className="table-action" type="button" onClick={(event) => { event.stopPropagation(); onEdit(row); }}>Edit</button></td>}</tr>)}</tbody></table>{!rows.length && <p className="empty">No records yet.</p>}</div>;
+function DataTable({ headers, labels, rows, resource, onEdit, onDelete, onOpen }: { headers: readonly string[]; labels: readonly string[]; rows: Record<string, unknown>[]; resource?: string; onEdit?: (row: Record<string, unknown>) => void; onDelete?: (row: Record<string, unknown>) => void; onOpen?: (row: Record<string, unknown>) => void }) {
+  return <div className="table-wrap"><table><thead><tr>{headers.map((header) => <th key={header}>{header}</th>)}</tr></thead><tbody>{rows.map((row, index) => <tr key={index} onClick={() => onOpen?.(row)}>{labels.map((label) => <td key={label}>{renderCell(label, row[label])}</td>)}{onEdit && <td><div className="table-actions"><button className="table-action" type="button" onClick={(event) => { event.stopPropagation(); onEdit(row); }}>Edit</button>{onDelete && <button className="table-action danger" type="button" onClick={(event) => { event.stopPropagation(); onDelete(row); }}>{dangerLabel(resource)}</button>}</div></td>}</tr>)}</tbody></table>{!rows.length && <p className="empty">No records yet.</p>}</div>;
+}
+
+function dangerLabel(resource?: string) {
+  if (resource === "packages") return "Archive";
+  if (resource === "bookings") return "Cancel";
+  return "Delete";
+}
+
+function rowTitle(row: Record<string, unknown>) {
+  return String(row.client ?? row.name ?? row.code ?? row.booking ?? row.task ?? row.title ?? row.amount ?? "this record");
 }
 
 function renderCell(label: string, value: unknown) {
@@ -324,6 +336,42 @@ function fieldValue(name: string, initial?: Record<string, unknown>, fallback?: 
 function Field(field: FieldConfig) {
   if (field.options) return <label>{field.label}<select name={field.name} required={field.required} defaultValue={field.defaultValue}>{!field.required && <option value="">Not set</option>}{field.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>;
   return <label>{field.label}<input name={field.name} type={field.type ?? "text"} required={field.required} defaultValue={field.defaultValue} placeholder={field.placeholder} /></label>;
+}
+
+function ConfirmDialog({ resource, row, onClose, onDone }: { resource: string; row: Record<string, unknown>; onClose: () => void; onDone: () => void }) {
+  const [error, setError] = useState("");
+  const label = dangerLabel(resource);
+  async function confirm() {
+    setError("");
+    try {
+      await api(`/api/${resource}/${row.id}`, { method: "DELETE" });
+      onDone();
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not complete action.");
+    }
+  }
+  return (
+    <div className="modal">
+      <div className="confirm-card">
+        <h3>{label} {rowTitle(row)}?</h3>
+        <p>{confirmMessage(resource)}</p>
+        {error && <p className="error">{error}</p>}
+        <div className="button-row">
+          <button type="button" className="ghost" onClick={onClose}>Keep record</button>
+          <button type="button" className="primary danger" onClick={confirm}>{label}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function confirmMessage(resource: string) {
+  if (resource === "packages") return "This package will be archived and hidden from active package selection.";
+  if (resource === "bookings") return "This booking will be marked as cancelled and kept for history.";
+  if (resource === "payments") return "This payment will be deleted and the booking balance will be recalculated.";
+  if (resource === "clients") return "Clients with bookings cannot be deleted. This keeps booking history safe.";
+  return "This action cannot be undone.";
 }
 
 function formFields(resource: string, lookups: Lookup | null): FieldConfig[] {

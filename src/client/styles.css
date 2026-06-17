@@ -839,6 +839,43 @@ tbody tr:last-child td {
   background: rgba(232, 0, 61, 0.1);
 }
 
+.table-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.table-action.danger {
+  color: #fb7185;
+}
+
+.table-action.danger:hover,
+.primary.danger {
+  border-color: rgba(239, 68, 68, 0.45);
+  background: #dc2626;
+  color: #fff;
+}
+
+.confirm-card {
+  width: min(430px, calc(100vw - 32px));
+  display: grid;
+  gap: 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  padding: 20px;
+}
+
+.confirm-card h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.confirm-card p {
+  color: var(--text2);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
 .empty,
 .pagination-meta {
   color: var(--text3);

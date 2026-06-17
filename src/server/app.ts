@@ -622,12 +622,86 @@ app.patch("/api/crm/:resource/:id", asyncRoute(async (req, res) => {
   res.status(404).json({ error: "This resource cannot be edited yet." });
 }));
 
+app.delete("/api/crm/:resource/:id", asyncRoute(async (req, res) => {
+  const { profile } = await requireProfile(req);
+  const db = getPrisma();
+  const resource = req.params.resource;
+  const id = String(req.params.id);
+
+  if (resource === "leads") {
+    const lead = await db.lead.findUnique({ where: { id } });
+    if (!lead) return res.status(404).json({ error: "Lead not found." });
+    if (!profile.isAdmin && lead.assignedProfileId && lead.assignedProfileId !== profile.profileId) return res.status(403).json({ error: "Forbidden" });
+    await db.$transaction([
+      db.activityLog.create({ data: { action: "LEAD_DELETED", message: `Lead deleted for ${lead.clientName}.`, profileId: profile.profileId } }),
+      db.lead.delete({ where: { id } }),
+    ]);
+    return res.json({ ok: true });
+  }
+
+  if (resource === "clients") {
+    const client = await db.client.findUnique({ where: { id }, include: { bookings: true } });
+    if (!client) return res.status(404).json({ error: "Client not found." });
+    if (!profile.isAdmin && client.assignedProfileId && client.assignedProfileId !== profile.profileId) return res.status(403).json({ error: "Forbidden" });
+    if (client.bookings.length) return res.status(409).json({ error: "This client has bookings. Cancel or reassign bookings before deleting the client." });
+    await db.$transaction([
+      db.activityLog.create({ data: { action: "CLIENT_CREATED", message: `Client ${client.fullName} was deleted.`, profileId: profile.profileId } }),
+      db.client.delete({ where: { id } }),
+    ]);
+    return res.json({ ok: true });
+  }
+
+  if (resource === "packages") {
+    const item = await db.package.findUnique({ where: { id } });
+    if (!item) return res.status(404).json({ error: "Package not found." });
+    const archived = await db.package.update({ where: { id }, data: { status: "ARCHIVED" } });
+    await db.activityLog.create({ data: { action: "PACKAGE_CREATED", message: `Package archived: ${archived.name}`, profileId: profile.profileId } });
+    return res.json({ ok: true, archived: true });
+  }
+
+  if (resource === "bookings") {
+    const booking = await db.booking.findUnique({ where: { id } });
+    if (!booking) return res.status(404).json({ error: "Booking not found." });
+    if (!profile.isAdmin && booking.assignedProfileId && booking.assignedProfileId !== profile.profileId) return res.status(403).json({ error: "Forbidden" });
+    const cancelled = await db.booking.update({ where: { id }, data: { bookingStatus: "CANCELLED" } });
+    await db.activityLog.create({ data: { action: "BOOKING_CANCELLED", message: `Booking cancelled: ${cancelled.bookingCode}.`, profileId: profile.profileId, bookingId: cancelled.id } });
+    return res.json({ ok: true, cancelled: true });
+  }
+
+  if (resource === "payments") {
+    const payment = await db.payment.findUnique({ where: { id }, include: { booking: true } });
+    if (!payment) return res.status(404).json({ error: "Payment not found." });
+    if (!profile.isAdmin && payment.recordedById && payment.recordedById !== profile.profileId) return res.status(403).json({ error: "Forbidden" });
+    await db.payment.delete({ where: { id } });
+    const payments = await db.payment.findMany({ where: { bookingId: payment.bookingId } });
+    const newPaid = payments.reduce((sum, item) => sum + Number(item.amountPaid), 0);
+    const total = Number(payment.booking.totalPrice);
+    await db.booking.update({ where: { id: payment.bookingId }, data: { paidAmount: newPaid, remainingAmount: Math.max(total - newPaid, 0), paymentStatus: newPaid <= 0 ? "UNPAID" : total - newPaid <= 0 ? "PAID" : "PARTIAL" } });
+    await db.activityLog.create({ data: { action: "PAYMENT_ADDED", message: `Payment deleted from ${payment.booking.bookingCode}.`, profileId: profile.profileId, bookingId: payment.bookingId } });
+    return res.json({ ok: true });
+  }
+
+  if (resource === "tasks") {
+    const task = await db.task.findUnique({ where: { id } });
+    if (!task) return res.status(404).json({ error: "Task not found." });
+    if (!profile.isAdmin && task.assignedProfileId && task.assignedProfileId !== profile.profileId) return res.status(403).json({ error: "Forbidden" });
+    await db.$transaction([
+      db.activityLog.create({ data: { action: "TASK_CREATED", message: `Task deleted: ${task.title}.`, profileId: profile.profileId } }),
+      db.task.delete({ where: { id } }),
+    ]);
+    return res.json({ ok: true });
+  }
+
+  res.status(404).json({ error: "This resource cannot be deleted." });
+}));
+
 for (const resource of ["dashboard", "leads", "clients", "packages", "bookings", "payments", "tasks", "activity"] as const) {
   app.get(`/api/${resource}`, (req, res) => res.redirect(307, `/api/crm/${resource}${req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : ""}`));
   if (resource !== "dashboard" && resource !== "activity") {
     app.get(`/api/${resource}/:id`, (req, res) => res.redirect(307, `/api/crm/${resource}/${req.params.id}`));
     app.post(`/api/${resource}`, (_req, res) => res.redirect(307, `/api/crm/${resource}`));
     app.patch(`/api/${resource}/:id`, (req, res) => res.redirect(307, `/api/crm/${resource}/${req.params.id}`));
+    app.delete(`/api/${resource}/:id`, (req, res) => res.redirect(307, `/api/crm/${resource}/${req.params.id}`));
   }
 }
 
