@@ -26,6 +26,7 @@ type ChartDatum = { label: string; value: number };
 type ResourceResponse = { rows: Record<string, unknown>[]; total: number; page: number; pageCount: number };
 type DeploymentItem = { section: string; label: string; status: "ready" | "warning" | "missing"; detail: string };
 type DeploymentChecklist = { items: DeploymentItem[]; summary: { ready: number; blocking: number; warnings: number; total: number } };
+type ImportPreview = { type: string; totalRows: number; validRows: number; invalidRows: number; rows: { row: number; status: "valid" | "invalid"; issues: string[]; preview: Record<string, string> }[] };
 type DetailResponse = {
   title: string;
   subtitle: string;
@@ -529,13 +530,59 @@ function formFields(resource: string, lookups: Lookup | null): FieldConfig[] {
 }
 
 function ImportExcel({ type, onDone }: { type: string; onDone: () => void }) {
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<ImportPreview | null>(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    await api(`/api/import/${type}`, { method: "POST", body: form });
-    onDone();
+    setError("");
+    const selected = new FormData(event.currentTarget).get("file");
+    if (!(selected instanceof File) || !selected.name) {
+      setError("Choose an Excel file first.");
+      return;
+    }
+    setFile(selected);
+    setBusy(true);
+    try {
+      const form = new FormData();
+      form.append("file", selected);
+      setPreview(await api<ImportPreview>(`/api/import/${type}/preview`, { method: "POST", body: form }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not preview import.");
+    } finally {
+      setBusy(false);
+    }
   }
-  return <form onSubmit={submit} className="import"><input name="file" type="file" accept=".xlsx,.xls,.csv" /><button className="ghost"><Upload size={14} /> Import</button></form>;
+  async function confirm() {
+    if (!file) return;
+    setBusy(true);
+    setError("");
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      await api(`/api/import/${type}`, { method: "POST", body: form });
+      setPreview(null);
+      setFile(null);
+      onDone();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not import file.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return <>
+    <form onSubmit={submit} className="import"><input name="file" type="file" accept=".xlsx,.xls,.csv" /><button className="ghost" disabled={busy}><Upload size={14} /> Preview</button>{error && <span className="inline-error">{error}</span>}</form>
+    {preview && <ImportPreviewModal preview={preview} busy={busy} error={error} onClose={() => setPreview(null)} onConfirm={confirm} />}
+  </>;
+}
+
+function ImportPreviewModal({ preview, busy, error, onClose, onConfirm }: { preview: ImportPreview; busy: boolean; error: string; onClose: () => void; onConfirm: () => void }) {
+  const columns = Array.from(preview.rows.reduce((set, row) => {
+    Object.keys(row.preview).forEach((key) => set.add(key));
+    return set;
+  }, new Set<string>())).slice(0, 6);
+  return <div className="modal"><div className="import-preview"><div className="card-header"><div><div className="card-title">Import preview</div><p>{preview.totalRows} rows scanned for {preview.type}</p></div><button className="ghost" onClick={onClose}>Close</button></div><section className="stats compact"><div className="stat"><span>Valid</span><b>{preview.validRows}</b><small>Ready to import</small></div><div className="stat"><span>Invalid</span><b>{preview.invalidRows}</b><small>Skipped until fixed</small></div><div className="stat"><span>Preview</span><b>{preview.rows.length}</b><small>Rows shown</small></div></section><div className="preview-table"><table><thead><tr><th>Row</th><th>Status</th>{columns.map((column) => <th key={column}>{titleCase(column)}</th>)}<th>Issues</th></tr></thead><tbody>{preview.rows.map((row) => <tr key={row.row}><td>{row.row}</td><td><span className={`chip ${row.status === "valid" ? "chip-green" : "chip-red"}`}>{row.status}</span></td>{columns.map((column) => <td key={column}>{row.preview[column] || "-"}</td>)}<td>{row.issues.length ? row.issues.join(", ") : "-"}</td></tr>)}</tbody></table></div>{error && <p className="error">{error}</p>}<div className="button-row"><button className="ghost" onClick={onClose}>Cancel</button><button className="primary" disabled={busy || preview.validRows === 0} onClick={onConfirm}>{busy ? "Importing..." : `Import ${preview.validRows} rows`}</button></div></div></div>;
 }
 
 function Profiles({ auth, refreshAuth }: { auth: AuthState; refreshAuth: () => Promise<void> }) {

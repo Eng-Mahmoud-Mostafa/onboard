@@ -993,7 +993,14 @@ nav {
 
 .import {
   display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
+}
+
+.inline-error {
+  color: #fb7185;
+  font-size: 12px;
 }
 
 .import.vertical {
@@ -1250,6 +1257,53 @@ tbody tr:last-child td {
   flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 20px;
+}
+
+.import-preview {
+  width: min(1100px, calc(100vw - 32px));
+  max-height: calc(100vh - 36px);
+  display: grid;
+  gap: 14px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  padding-bottom: 16px;
+}
+
+.import-preview .card-header p {
+  margin: 4px 0 0;
+  color: var(--text3);
+  font-size: 12px;
+}
+
+.import-preview .stats {
+  margin: 0 16px;
+}
+
+.preview-table {
+  margin: 0 16px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.preview-table table {
+  min-width: 760px;
+}
+
+.preview-table td,
+.preview-table th {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-preview > .button-row,
+.import-preview > .error {
+  margin-left: 16px;
+  margin-right: 16px;
 }
 
 .deploy-grid {

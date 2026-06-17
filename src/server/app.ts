@@ -122,6 +122,53 @@ async function readWorksheetRows(buffer: Buffer) {
   return rows;
 }
 
+function previewValue(value: unknown) {
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  return text(value);
+}
+
+function importPreviewRow(index: number, status: "valid" | "invalid", issues: string[], preview: Record<string, unknown>) {
+  return { row: index + 2, status, issues, preview: Object.fromEntries(Object.entries(preview).map(([key, value]) => [key, previewValue(value)])) };
+}
+
+function parseImportRows(type: string, rows: Record<string, unknown>[], profileId: string, profileByName: Map<string, string>) {
+  if (type === "leads") {
+    const parsed = rows.map((row, index) => {
+      const clientName = text(row.clientname ?? row.name ?? row.fullname);
+      const phone = text(row.phonenumber ?? row.phone ?? row.mobile);
+      const interestedPackage = text(row.interesteddestinationpackage ?? row.interestedpackage ?? row.package ?? row.destination);
+      const issues = [!clientName ? "Missing client name" : "", !phone ? "Missing phone" : "", !interestedPackage ? "Missing interested package or destination" : ""].filter(Boolean);
+      const data = { clientName, phone, email: text(row.email) || null, source: enumValue(LeadSource, row.source, LeadSource.OTHER), interestedPackage, budget: Number(text(row.budget)) || null, travelDate: rowDate(row.traveldate), travelers: Number(text(row.travelers ?? row.numberoftravelers)) || 1, status: enumValue(LeadStatus, row.status, LeadStatus.NEW), assignedProfileId: profileByName.get(normalizeHeader(row.assignedprofile ?? row.profile)) ?? profileId, notes: text(row.notes) || null };
+      return { data, preview: importPreviewRow(index, issues.length ? "invalid" : "valid", issues, { clientName, phone, email: data.email, source: data.source, interestedPackage, travelDate: data.travelDate, travelers: data.travelers, status: data.status }) };
+    });
+    return { records: parsed.filter((item) => item.preview.status === "valid").map((item) => item.data), previewRows: parsed.map((item) => item.preview) };
+  }
+
+  if (type === "tasks") {
+    const parsed = rows.map((row, index) => {
+      const title = text(row.tasktitle ?? row.title ?? row.task);
+      const dueAt = rowDate(row.duedatetime ?? row.dueat ?? row.duedate);
+      const issues = [!title ? "Missing task title" : "", !dueAt ? "Missing or invalid due date" : ""].filter(Boolean);
+      const data = { title, description: text(row.description) || null, dueAt, priority: enumValue(TaskPriority, row.priority, TaskPriority.MEDIUM), assignedProfileId: profileByName.get(normalizeHeader(row.assignedprofile ?? row.profile)) ?? profileId };
+      return { data, preview: importPreviewRow(index, issues.length ? "invalid" : "valid", issues, { title, dueAt, priority: data.priority, assignedProfile: text(row.assignedprofile ?? row.profile) || "Current profile" }) };
+    });
+    return { records: parsed.filter((item) => item.preview.status === "valid").map((item) => item.data), previewRows: parsed.map((item) => item.preview) };
+  }
+
+  if (type === "clients") {
+    const parsed = rows.map((row, index) => {
+      const fullName = text(row.fullname ?? row.name ?? row.clientname);
+      const phone = text(row.phone ?? row.mobile ?? row.phonenumber);
+      const issues = [!fullName ? "Missing full name" : "", !phone ? "Missing phone" : ""].filter(Boolean);
+      const data = { fullName, phone, email: text(row.email) || null, nationality: text(row.nationality) || null, passportNumber: text(row.passportnumber ?? row.passport) || null, notes: text(row.notes) || null, assignedProfileId: profileId };
+      return { data, preview: importPreviewRow(index, issues.length ? "invalid" : "valid", issues, { fullName, phone, email: data.email, nationality: data.nationality, passportNumber: data.passportNumber }) };
+    });
+    return { records: parsed.filter((item) => item.preview.status === "valid").map((item) => item.data), previewRows: parsed.map((item) => item.preview) };
+  }
+
+  return null;
+}
+
 app.get("/api/health", (_, res) => res.json({ ok: true, app: "onboard-vite-api" }));
 
 app.get("/api/auth/me", asyncRoute(async (req, res) => {
@@ -921,58 +968,51 @@ app.post("/api/tasks/:id/done", asyncRoute(async (req, res) => {
   res.json({ ok: true });
 }));
 
+app.post("/api/import/:type/preview", upload.single("file"), asyncRoute(async (req, res) => {
+  const { profile } = await requireAdmin(req);
+  if (!req.file) return res.status(400).json({ error: "Choose an Excel file first." });
+  const db = getPrisma();
+  const type = String(req.params.type);
+  const rows = await readWorksheetRows(req.file.buffer);
+  const profiles = await db.profile.findMany({ select: { id: true, name: true } });
+  const profileByName = new Map(profiles.map((item) => [normalizeHeader(item.name), item.id]));
+  const parsed = parseImportRows(type, rows, profile.profileId, profileByName);
+  if (!parsed) return res.status(404).json({ error: "Unknown import type" });
+  const invalid = parsed.previewRows.filter((row) => row.status === "invalid").length;
+  res.json({ ok: true, type, totalRows: rows.length, validRows: parsed.records.length, invalidRows: invalid, rows: parsed.previewRows.slice(0, 50) });
+}));
+
 app.post("/api/import/:type", upload.single("file"), asyncRoute(async (req, res) => {
   const { profile } = await requireAdmin(req);
   if (!req.file) return res.status(400).json({ error: "Choose an Excel file first." });
   const db = getPrisma();
+  const type = String(req.params.type);
   const rows = await readWorksheetRows(req.file.buffer);
   const profiles = await db.profile.findMany({ select: { id: true, name: true } });
   const profileByName = new Map(profiles.map((item) => [normalizeHeader(item.name), item.id]));
+  const parsed = parseImportRows(type, rows, profile.profileId, profileByName);
+  if (!parsed) return res.status(404).json({ error: "Unknown import type" });
 
-  if (req.params.type === "leads") {
-    const leads = rows.map((row) => {
-      const clientName = text(row.clientname ?? row.name ?? row.fullname);
-      const phone = text(row.phonenumber ?? row.phone ?? row.mobile);
-      const interestedPackage = text(row.interesteddestinationpackage ?? row.interestedpackage ?? row.package ?? row.destination);
-      if (!clientName || !phone || !interestedPackage) return null;
-      return { clientName, phone, email: text(row.email) || null, source: enumValue(LeadSource, row.source, LeadSource.OTHER), interestedPackage, budget: Number(text(row.budget)) || null, travelDate: rowDate(row.traveldate), travelers: Number(text(row.travelers ?? row.numberoftravelers)) || 1, status: enumValue(LeadStatus, row.status, LeadStatus.NEW), assignedProfileId: profileByName.get(normalizeHeader(row.assignedprofile ?? row.profile)) ?? profile.profileId, notes: text(row.notes) || null };
-    }).filter((lead): lead is NonNullable<typeof lead> => Boolean(lead));
+  if (type === "leads") {
+    const leads = parsed.records;
     if (!leads.length) return res.status(400).json({ error: "No valid leads found." });
-    await db.lead.createMany({ data: leads });
+    await db.lead.createMany({ data: leads as never });
     await db.activityLog.create({ data: { action: "DATA_IMPORTED", message: `${profile.profileName} imported ${leads.length} leads from Excel.`, profileId: profile.profileId } });
     return res.json({ ok: true, message: `Imported ${leads.length} leads.` });
   }
 
-  if (req.params.type === "tasks") {
-    const tasks = rows.map((row) => {
-      const title = text(row.tasktitle ?? row.title ?? row.task);
-      const dueAt = rowDate(row.duedatetime ?? row.dueat ?? row.duedate);
-      if (!title || !dueAt) return null;
-      return { title, description: text(row.description) || null, dueAt, priority: enumValue(TaskPriority, row.priority, TaskPriority.MEDIUM), assignedProfileId: profileByName.get(normalizeHeader(row.assignedprofile ?? row.profile)) ?? profile.profileId };
-    }).filter((task): task is NonNullable<typeof task> => Boolean(task));
+  if (type === "tasks") {
+    const tasks = parsed.records;
     if (!tasks.length) return res.status(400).json({ error: "No valid tasks found." });
-    await db.task.createMany({ data: tasks });
+    await db.task.createMany({ data: tasks as never });
     await db.activityLog.create({ data: { action: "DATA_IMPORTED", message: `${profile.profileName} imported ${tasks.length} tasks from Excel.`, profileId: profile.profileId } });
     return res.json({ ok: true, message: `Imported ${tasks.length} tasks.` });
   }
 
-  if (req.params.type === "clients") {
-    const clients = rows.map((row) => {
-      const fullName = text(row.fullname ?? row.name ?? row.clientname);
-      const phone = text(row.phone ?? row.mobile ?? row.phonenumber);
-      if (!fullName || !phone) return null;
-      return {
-        fullName,
-        phone,
-        email: text(row.email) || null,
-        nationality: text(row.nationality) || null,
-        passportNumber: text(row.passportnumber ?? row.passport) || null,
-        notes: text(row.notes) || null,
-        assignedProfileId: profile.profileId,
-      };
-    }).filter((client): client is NonNullable<typeof client> => Boolean(client));
+  if (type === "clients") {
+    const clients = parsed.records;
     if (!clients.length) return res.status(400).json({ error: "No valid clients found." });
-    await db.client.createMany({ data: clients });
+    await db.client.createMany({ data: clients as never });
     await db.activityLog.create({ data: { action: "DATA_IMPORTED", message: `${profile.profileName} imported ${clients.length} clients from Excel.`, profileId: profile.profileId } });
     return res.json({ ok: true, message: `Imported ${clients.length} clients.` });
   }
