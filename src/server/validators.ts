@@ -34,7 +34,21 @@ export const clientSchema = z.object({
   email: z.string().trim().email().optional().or(z.literal("")),
   nationality: z.string().optional(),
   passportNumber: z.string().optional(),
+  companyId: optionalText,
   notes: z.string().optional(),
+});
+export const companySchema = z.object({
+  name: z.string().trim().min(2),
+  type: z.enum(["TRAVEL_AGENCY", "CORPORATE", "HOTEL", "PARTNER", "OTHER"]).default("TRAVEL_AGENCY"),
+  status: z.enum(["ACTIVE", "INACTIVE", "ARCHIVED"]).default("ACTIVE"),
+  contactPerson: optionalText,
+  phone: optionalText,
+  email: optionalEmail,
+  address: optionalText,
+  taxId: optionalText,
+  commissionPercent: optionalNonnegativeNumber,
+  assignedProfileId: optionalText,
+  notes: optionalText,
 });
 export const packageSchema = z.object({
   name: z.string().trim().min(2),
@@ -57,6 +71,7 @@ export const taskSchema = z.object({
 });
 export const bookingSchema = z.object({
   clientId: z.string().min(1),
+  companyId: optionalText,
   packageId: optionalText,
   travelDate: z.string().min(1),
   travelers: z.coerce.number().int().positive(),

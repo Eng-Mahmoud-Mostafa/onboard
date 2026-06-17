@@ -67,6 +67,20 @@ enum TaskStatus {
   MISSED
 }
 
+enum CompanyType {
+  TRAVEL_AGENCY
+  CORPORATE
+  HOTEL
+  PARTNER
+  OTHER
+}
+
+enum CompanyStatus {
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
 enum ActivityAction {
   CLIENT_CREATED
   LEAD_CREATED
@@ -86,6 +100,9 @@ enum ActivityAction {
   PROFILE_CREATED
   PROFILE_PASSWORD_RESET
   DATA_IMPORTED
+  COMPANY_CREATED
+  COMPANY_UPDATED
+  COMPANY_ARCHIVED
 }
 
 model User {
@@ -131,6 +148,7 @@ model Profile {
   resetTokens    ProfilePasswordResetToken[]
   clients        Client[]
   uploadedFiles  UploadedFile[]
+  companies      Company[]
 
   @@unique([name])
   @@index([name])
@@ -164,6 +182,32 @@ model OtpToken {
   user         User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([email, createdAt])
+}
+
+model Company {
+  id                String        @id @default(cuid())
+  name              String
+  type              CompanyType   @default(TRAVEL_AGENCY)
+  status            CompanyStatus @default(ACTIVE)
+  contactPerson     String?
+  phone             String?
+  email             String?
+  address           String?
+  taxId             String?
+  commissionPercent Decimal?      @db.Decimal(5, 2)
+  notes             String?
+  assignedProfileId String?
+  assignedProfile   Profile?      @relation(fields: [assignedProfileId], references: [id], onDelete: SetNull)
+  clients           Client[]
+  bookings          Booking[]
+  activityLogs      ActivityLog[]
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  @@index([name])
+  @@index([type])
+  @@index([status])
+  @@index([assignedProfileId])
 }
 
 model Lead {
@@ -205,6 +249,8 @@ model Client {
   email          String?
   nationality    String?
   passportNumber String?
+  companyId      String?
+  company        Company?   @relation(fields: [companyId], references: [id], onDelete: SetNull)
   notes          String?
   assignedProfileId String?
   assignedProfile   Profile?   @relation(fields: [assignedProfileId], references: [id], onDelete: SetNull)
@@ -219,6 +265,7 @@ model Client {
   @@index([phone])
   @@index([email])
   @@index([assignedProfileId])
+  @@index([companyId])
   @@index([createdAt])
 }
 
@@ -261,6 +308,8 @@ model Booking {
   bookingStatus     BookingStatus  @default(PENDING)
   assignedProfileId String?
   assignedProfile   Profile?       @relation(fields: [assignedProfileId], references: [id], onDelete: SetNull)
+  companyId         String?
+  company           Company?        @relation(fields: [companyId], references: [id], onDelete: SetNull)
   notes             String?
   payments          Payment[]
   tasks             Task[]
@@ -272,6 +321,7 @@ model Booking {
   @@index([bookingStatus])
   @@index([paymentStatus])
   @@index([assignedProfileId])
+  @@index([companyId])
   @@index([travelDate])
   @@index([createdAt])
 }
@@ -332,6 +382,8 @@ model ActivityLog {
   lead      Lead?          @relation(fields: [leadId], references: [id], onDelete: SetNull)
   clientId  String?
   client    Client?        @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  companyId String?
+  company   Company?       @relation(fields: [companyId], references: [id], onDelete: SetNull)
   bookingId String?
   booking   Booking?       @relation(fields: [bookingId], references: [id], onDelete: SetNull)
   paymentId String?
@@ -341,6 +393,7 @@ model ActivityLog {
   createdAt DateTime       @default(now())
 
   @@index([profileId])
+  @@index([companyId])
   @@index([message])
   @@index([createdAt])
 }

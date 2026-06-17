@@ -1,11 +1,11 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { BarChart3, CalendarCheck, CircleDollarSign, ClipboardList, History, LayoutDashboard, LogOut, Mail, PackageOpen, Plane, Search, Settings, ShieldCheck, Upload, Users } from "lucide-react";
+import { BarChart3, Building2, CalendarCheck, CircleDollarSign, ClipboardList, History, LayoutDashboard, LogOut, Mail, PackageOpen, Plane, Search, Settings, ShieldCheck, Upload, Users } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { api, AuthState, postJson } from "./api";
 
 type Profile = { id: string; name: string; isAdmin: boolean };
-type Lookup = { profiles: { id: string; name: string }[]; clients: { id: string; fullName: string }[]; packages: { id: string; name: string }[]; bookings: { id: string; bookingCode: string }[] };
+type Lookup = { profiles: { id: string; name: string }[]; clients: { id: string; fullName: string }[]; companies: { id: string; name: string }[]; packages: { id: string; name: string }[]; bookings: { id: string; bookingCode: string }[] };
 type FieldConfig = { name: string; label: string; type?: string; options?: { value: string; label: string }[]; required?: boolean; defaultValue?: string | number; placeholder?: string };
 type Dashboard = {
   stats: { label: string; value: string | number; hint: string }[];
@@ -28,6 +28,7 @@ const nav = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, group: "Main" },
   { href: "/leads", label: "Leads", icon: ClipboardList, group: "Main" },
   { href: "/clients", label: "Clients", icon: Users, group: "Main" },
+  { href: "/companies", label: "Agencies", icon: Building2, group: "Main" },
   { href: "/packages", label: "Packages", icon: PackageOpen, group: "Main" },
   { href: "/bookings", label: "Bookings", icon: Plane, group: "Main" },
   { href: "/payments", label: "Payments", icon: CircleDollarSign, group: "Main" },
@@ -41,9 +42,10 @@ const nav = [
 
 const resourceConfig = {
   leads: { title: "Leads", description: "Track inquiries, campaign sources, travel intent, status, and owners.", headers: ["Client", "Phone", "Source", "Status", "Profile", "Travel", "Updated"], labels: ["client", "phone", "source", "status", "profile", "travel", "updated"] },
-  clients: { title: "Clients", description: "All passenger and customer records.", headers: ["Name", "Phone", "Email", "Bookings", "Paid", "Remaining"], labels: ["name", "phone", "email", "bookings", "paid", "remaining"] },
+  clients: { title: "Clients", description: "All passenger and customer records.", headers: ["Name", "Phone", "Email", "Agency", "Bookings", "Paid", "Remaining"], labels: ["name", "phone", "email", "company", "bookings", "paid", "remaining"] },
+  companies: { title: "Agencies", description: "Manage travel agencies, corporate accounts, partners, contacts, and commission terms.", headers: ["Agency", "Type", "Status", "Contact", "Phone", "Commission", "Clients", "Bookings", "Profile"], labels: ["name", "type", "status", "contactPerson", "phone", "commission", "clients", "bookings", "profile"] },
   packages: { title: "Packages", description: "Tour products, destinations, pricing, capacity, and availability.", headers: ["Name", "Destination", "Duration", "Price", "Capacity", "Status"], labels: ["name", "destination", "duration", "price", "capacity", "status"] },
-  bookings: { title: "Bookings", description: "Confirmed and pending travel bookings with balances.", headers: ["Code", "Client", "Package", "Travel", "Total", "Paid", "Remaining", "Status", "Profile"], labels: ["code", "client", "package", "travel", "total", "paid", "remaining", "status", "profile"] },
+  bookings: { title: "Bookings", description: "Confirmed and pending travel bookings with balances.", headers: ["Code", "Client", "Agency", "Package", "Travel", "Total", "Paid", "Remaining", "Status", "Profile"], labels: ["code", "client", "company", "package", "travel", "total", "paid", "remaining", "status", "profile"] },
   payments: { title: "Payments", description: "Payments, methods, dates, and profile attribution.", headers: ["Booking", "Client", "Amount", "Method", "Date", "Profile"], labels: ["booking", "client", "amount", "method", "date", "profile"] },
   tasks: { title: "Tasks", description: "Follow-ups and reminders assigned to every profile.", headers: ["Task", "Due", "Priority", "Status", "Profile"], labels: ["task", "due", "priority", "status", "profile"] },
   activity: { title: "Activity Log", description: "A searchable history of CRM activity.", headers: ["Action", "Message", "Profile", "Date"], labels: ["action", "message", "profile", "date"] },
@@ -187,6 +189,8 @@ function Shell({ auth, refreshAuth }: { auth: AuthState; refreshAuth: () => Prom
             <Route path="/leads/:id" element={<DetailPage resource="leads" />} />
             <Route path="/clients" element={<ResourcePage resource="clients" profile={profile} />} />
             <Route path="/clients/:id" element={<DetailPage resource="clients" />} />
+            <Route path="/companies" element={<ResourcePage resource="companies" profile={profile} />} />
+            <Route path="/companies/:id" element={<DetailPage resource="companies" />} />
             <Route path="/packages" element={<ResourcePage resource="packages" profile={profile} />} />
             <Route path="/packages/:id" element={<DetailPage resource="packages" />} />
             <Route path="/bookings" element={<ResourcePage resource="bookings" profile={profile} />} />
@@ -292,18 +296,18 @@ function DataTable({ headers, labels, rows, resource, onEdit, onDelete, onOpen, 
 }
 
 function dangerLabel(resource?: string) {
-  if (resource === "packages") return "Archive";
+  if (resource === "packages" || resource === "companies") return "Archive";
   if (resource === "bookings") return "Cancel";
   return "Delete";
 }
 
 function rowTitle(row: Record<string, unknown>) {
-  return String(row.client ?? row.name ?? row.code ?? row.booking ?? row.task ?? row.title ?? row.amount ?? "this record");
+  return String(row.client ?? row.name ?? row.company ?? row.code ?? row.booking ?? row.task ?? row.title ?? row.amount ?? "this record");
 }
 
 function renderCell(label: string, value: unknown) {
   const text = String(value ?? "-");
-  if (["status", "source", "priority", "method", "role"].includes(label)) return <span className={`chip ${chipClass(text)}`}>{text}</span>;
+  if (["status", "source", "priority", "method", "role", "type"].includes(label)) return <span className={`chip ${chipClass(text)}`}>{text}</span>;
   if (["paid", "remaining", "total", "amount", "revenue"].includes(label)) return <span className="cell-money">{text}</span>;
   if (["client", "name", "code", "task", "profile", "package"].includes(label)) return <span className="cell-strong">{text}</span>;
   return text;
@@ -320,7 +324,7 @@ function chipClass(value: string) {
 
 function CreateDrawer({ resource, onDone }: { resource: string; onDone: () => void }) {
   const [open, setOpen] = useState(false);
-  return <>{<button className="primary small" onClick={() => setOpen(true)}>Add {resource.slice(0, -1)}</button>}{open && <RecordForm resource={resource} onClose={() => setOpen(false)} onDone={onDone} />}</>;
+  return <>{<button className="primary small" onClick={() => setOpen(true)}>Add {singularLabel(resource)}</button>}{open && <RecordForm resource={resource} onClose={() => setOpen(false)} onDone={onDone} />}</>;
 }
 
 function RecordForm({ resource, onClose, onDone, initial }: { resource: string; onClose: () => void; onDone: () => void; initial?: Record<string, unknown> }) {
@@ -343,7 +347,12 @@ function RecordForm({ resource, onClose, onDone, initial }: { resource: string; 
       setError(err instanceof Error ? err.message : "Could not save.");
     }
   }
-  return <div className="modal"><form className="drawer" onSubmit={submit}><h3>{isEditing ? "Edit" : "Add"} {resource.slice(0, -1)}</h3>{fields.map((field) => <Field key={field.name} {...field} defaultValue={fieldValue(field.name, initial, field.defaultValue)} />)}{error && <p className="error">{error}</p>}<div className="button-row"><button type="button" className="ghost" onClick={onClose}>Cancel</button><button className="primary">{isEditing ? "Save changes" : "Save"}</button></div></form></div>;
+  return <div className="modal"><form className="drawer" onSubmit={submit}><h3>{isEditing ? "Edit" : "Add"} {singularLabel(resource)}</h3>{fields.map((field) => <Field key={field.name} {...field} defaultValue={fieldValue(field.name, initial, field.defaultValue)} />)}{error && <p className="error">{error}</p>}<div className="button-row"><button type="button" className="ghost" onClick={onClose}>Cancel</button><button className="primary">{isEditing ? "Save changes" : "Save"}</button></div></form></div>;
+}
+
+function singularLabel(resource: string) {
+  if (resource === "companies") return "agency";
+  return resource.slice(0, -1);
 }
 
 function fieldValue(name: string, initial?: Record<string, unknown>, fallback?: string | number) {
@@ -386,6 +395,7 @@ function ConfirmDialog({ resource, row, onClose, onDone }: { resource: string; r
 }
 
 function confirmMessage(resource: string) {
+  if (resource === "companies") return "Agencies with linked clients or bookings will be archived to keep history safe.";
   if (resource === "packages") return "This package will be archived and hidden from active package selection.";
   if (resource === "bookings") return "This booking will be marked as cancelled and kept for history.";
   if (resource === "payments") return "This payment will be deleted and the booking balance will be recalculated.";
@@ -395,6 +405,7 @@ function confirmMessage(resource: string) {
 
 function formFields(resource: string, lookups: Lookup | null): FieldConfig[] {
   const profileOptions = (lookups?.profiles ?? []).map((p) => ({ value: p.id, label: p.name }));
+  const companyOptions = (lookups?.companies ?? []).map((x) => ({ value: x.id, label: x.name }));
   if (resource === "leads") return [
     { name: "clientName", label: "Client name", required: true, placeholder: "Client or lead name" },
     { name: "phone", label: "Phone", required: true, placeholder: "+20..." },
@@ -413,8 +424,22 @@ function formFields(resource: string, lookups: Lookup | null): FieldConfig[] {
     { name: "fullName", label: "Full name", required: true },
     { name: "phone", label: "Phone", required: true },
     { name: "email", label: "Email", type: "email", placeholder: "Optional" },
+    { name: "companyId", label: "Company / agency", options: companyOptions },
     { name: "nationality", label: "Nationality", placeholder: "Optional" },
     { name: "passportNumber", label: "Passport number", placeholder: "Optional" },
+    { name: "notes", label: "Notes", placeholder: "Optional" },
+  ];
+  if (resource === "companies") return [
+    { name: "name", label: "Agency name", required: true },
+    { name: "type", label: "Type", required: true, options: ["TRAVEL_AGENCY", "CORPORATE", "HOTEL", "PARTNER", "OTHER"].map((x) => ({ value: x, label: x })) },
+    { name: "status", label: "Status", required: true, options: ["ACTIVE", "INACTIVE", "ARCHIVED"].map((x) => ({ value: x, label: x })) },
+    { name: "contactPerson", label: "Contact person", placeholder: "Optional" },
+    { name: "phone", label: "Phone", placeholder: "Optional" },
+    { name: "email", label: "Email", type: "email", placeholder: "Optional" },
+    { name: "address", label: "Address", placeholder: "Optional" },
+    { name: "taxId", label: "Tax ID", placeholder: "Optional" },
+    { name: "commissionPercent", label: "Commission %", type: "number", placeholder: "Optional" },
+    { name: "assignedProfileId", label: "Assigned profile", options: profileOptions },
     { name: "notes", label: "Notes", placeholder: "Optional" },
   ];
   if (resource === "packages") return [
@@ -438,6 +463,7 @@ function formFields(resource: string, lookups: Lookup | null): FieldConfig[] {
   ];
   if (resource === "bookings") return [
     { name: "clientId", label: "Client", required: true, options: (lookups?.clients ?? []).map((x) => ({ value: x.id, label: x.fullName })) },
+    { name: "companyId", label: "Company / agency", options: companyOptions },
     { name: "packageId", label: "Package", options: (lookups?.packages ?? []).map((x) => ({ value: x.id, label: x.name })) },
     { name: "travelDate", label: "Travel date", type: "date", required: true },
     { name: "travelers", label: "Travelers", type: "number", required: true },
@@ -582,7 +608,7 @@ function ImportExportPage() {
         <div className="card">
           <h3>CSV export</h3>
           <p className="muted">Admin exports are generated server-side and logged in the activity feed.</p>
-          <div className="export-buttons">{["leads", "clients", "bookings", "payments", "reports"].map((type) => <a className="ghost" href={`/api/export/${type}?format=csv`} key={type}>Export {type}</a>)}</div>
+          <div className="export-buttons">{["leads", "clients", "companies", "bookings", "payments", "reports"].map((type) => <a className="ghost" href={`/api/export/${type}?format=csv`} key={type}>Export {type}</a>)}</div>
         </div>
       </section>
       <section className="card" style={{ padding: 20 }}>

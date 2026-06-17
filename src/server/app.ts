@@ -8,7 +8,7 @@ import { BookingStatus, LeadSource, LeadStatus, PaymentStatus, TaskPriority, Tas
 import { getPrisma } from "./db";
 import { assignedFilter, allowedDomain, clearAuth, compareHash, getSession, getUnlockedProfile, hashValue, isAllowedEmail, recordedFilter, requireAdmin, requireProfile, requireSession, setProfile, setSession, visibleProfiles } from "./auth";
 import { sendOtpEmail, sendProfileResetOtpEmail } from "./email";
-import { bookingSchema, clientSchema, leadSchema, packageSchema, paymentSchema, profileSchema, requestOtpSchema, taskSchema, verifyOtpSchema } from "./validators";
+import { bookingSchema, clientSchema, companySchema, leadSchema, packageSchema, paymentSchema, profileSchema, requestOtpSchema, taskSchema, verifyOtpSchema } from "./validators";
 import { enumLabel, money, shortDate } from "./format";
 import { getSupabase, storageBucket } from "./storage";
 
@@ -240,13 +240,14 @@ app.get("/api/lookups", asyncRoute(async (req, res) => {
   const { profile } = await requireProfile(req);
   const db = getPrisma();
   const assignedWhere = assignedFilter(profile);
-  const [profiles, clients, packages, bookings] = await Promise.all([
+  const [profiles, clients, packages, bookings, companies] = await Promise.all([
     profile.isAdmin ? db.profile.findMany({ select: { id: true, name: true }, orderBy: { name: "asc" } }) : db.profile.findMany({ where: { id: profile.profileId }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
     db.client.findMany({ where: profile.isAdmin ? {} : { assignedProfileId: profile.profileId }, select: { id: true, fullName: true }, orderBy: { fullName: "asc" } }),
     db.package.findMany({ where: { status: { not: "ARCHIVED" } }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
     db.booking.findMany({ where: assignedWhere, select: { id: true, bookingCode: true }, orderBy: { createdAt: "desc" }, take: 100 }),
+    db.company.findMany({ where: { ...assignedWhere, status: { not: "ARCHIVED" } }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
   ]);
-  res.json({ profiles, clients, packages, bookings });
+  res.json({ profiles, clients, packages, bookings, companies });
 }));
 
 app.get("/api/crm/:resource", asyncRoute(async (req, res) => {
@@ -294,8 +295,14 @@ app.get("/api/crm/:resource", asyncRoute(async (req, res) => {
 
   if (resource === "clients") {
     const where = { ...assignedFilter(current.profile), ...(q ? { OR: [{ fullName: { contains: q, mode: "insensitive" as const } }, { phone: { contains: q } }, { email: { contains: q, mode: "insensitive" as const } }] } : {}) };
-    const [rows, total] = await Promise.all([db.client.findMany({ where, include: { bookings: true }, orderBy: { updatedAt: "desc" }, skip, take: pageSize }), db.client.count({ where })]);
-    return paged(res, rows.map((client) => ({ id: client.id, fullName: client.fullName, name: client.fullName, phone: client.phone, email: client.email ?? "", nationality: client.nationality ?? "", passportNumber: client.passportNumber ?? "", notes: client.notes ?? "", assignedProfileId: client.assignedProfileId ?? "", bookings: client.bookings.length, paid: money(client.bookings.reduce((sum, booking) => sum + Number(booking.paidAmount), 0)), remaining: money(client.bookings.reduce((sum, booking) => sum + Number(booking.remainingAmount), 0)) })), total, page, pageSize);
+    const [rows, total] = await Promise.all([db.client.findMany({ where, include: { company: true, bookings: true }, orderBy: { updatedAt: "desc" }, skip, take: pageSize }), db.client.count({ where })]);
+    return paged(res, rows.map((client) => ({ id: client.id, fullName: client.fullName, name: client.fullName, phone: client.phone, email: client.email ?? "", nationality: client.nationality ?? "", passportNumber: client.passportNumber ?? "", companyId: client.companyId ?? "", company: client.company?.name ?? "-", notes: client.notes ?? "", assignedProfileId: client.assignedProfileId ?? "", bookings: client.bookings.length, paid: money(client.bookings.reduce((sum, booking) => sum + Number(booking.paidAmount), 0)), remaining: money(client.bookings.reduce((sum, booking) => sum + Number(booking.remainingAmount), 0)) })), total, page, pageSize);
+  }
+
+  if (resource === "companies") {
+    const where = { ...assignedFilter(current.profile), ...(q ? { OR: [{ name: { contains: q, mode: "insensitive" as const } }, { contactPerson: { contains: q, mode: "insensitive" as const } }, { phone: { contains: q } }, { email: { contains: q, mode: "insensitive" as const } }] } : {}) };
+    const [rows, total] = await Promise.all([db.company.findMany({ where, include: { assignedProfile: true, clients: true, bookings: true }, orderBy: { updatedAt: "desc" }, skip, take: pageSize }), db.company.count({ where })]);
+    return paged(res, rows.map((company) => ({ id: company.id, name: company.name, type: company.type, status: company.status, contactPerson: company.contactPerson ?? "", phone: company.phone ?? "", email: company.email ?? "", address: company.address ?? "", taxId: company.taxId ?? "", commissionPercent: company.commissionPercent?.toString() ?? "", commission: company.commissionPercent == null ? "-" : `${company.commissionPercent}%`, assignedProfileId: company.assignedProfileId ?? "", profile: company.assignedProfile?.name ?? "Unassigned", notes: company.notes ?? "", clients: company.clients.length, bookings: company.bookings.length })), total, page, pageSize);
   }
 
   if (resource === "packages") {
@@ -306,8 +313,8 @@ app.get("/api/crm/:resource", asyncRoute(async (req, res) => {
 
   if (resource === "bookings") {
     const where = { ...assignedFilter(current.profile), ...(q ? { OR: [{ bookingCode: { contains: q, mode: "insensitive" as const } }, { client: { fullName: { contains: q, mode: "insensitive" as const } } }, { package: { name: { contains: q, mode: "insensitive" as const } } }] } : {}) };
-    const [rows, total] = await Promise.all([db.booking.findMany({ where, include: { client: true, package: true, assignedProfile: true }, orderBy: { createdAt: "desc" }, skip, take: pageSize }), db.booking.count({ where })]);
-    return paged(res, rows.map((booking) => ({ id: booking.id, code: booking.bookingCode, clientId: booking.clientId, client: booking.client.fullName, packageId: booking.packageId ?? "", package: booking.package?.name ?? booking.packageNameSnapshot ?? "Custom trip", travelDate: booking.travelDate.toISOString().slice(0, 10), travel: shortDate(booking.travelDate), travelers: booking.travelers, totalPrice: booking.totalPrice.toString(), paidAmount: booking.paidAmount.toString(), total: money(booking.totalPrice.toString()), paid: money(booking.paidAmount.toString()), remaining: money(booking.remainingAmount.toString()), bookingStatus: booking.bookingStatus, status: enumLabel(booking.bookingStatus), assignedProfileId: booking.assignedProfileId ?? "", profile: booking.assignedProfile?.name ?? "Unassigned", notes: booking.notes ?? "" })), total, page, pageSize);
+    const [rows, total] = await Promise.all([db.booking.findMany({ where, include: { client: true, company: true, package: true, assignedProfile: true }, orderBy: { createdAt: "desc" }, skip, take: pageSize }), db.booking.count({ where })]);
+    return paged(res, rows.map((booking) => ({ id: booking.id, code: booking.bookingCode, clientId: booking.clientId, client: booking.client.fullName, companyId: booking.companyId ?? "", company: booking.company?.name ?? "-", packageId: booking.packageId ?? "", package: booking.package?.name ?? booking.packageNameSnapshot ?? "Custom trip", travelDate: booking.travelDate.toISOString().slice(0, 10), travel: shortDate(booking.travelDate), travelers: booking.travelers, totalPrice: booking.totalPrice.toString(), paidAmount: booking.paidAmount.toString(), total: money(booking.totalPrice.toString()), paid: money(booking.paidAmount.toString()), remaining: money(booking.remainingAmount.toString()), bookingStatus: booking.bookingStatus, status: enumLabel(booking.bookingStatus), assignedProfileId: booking.assignedProfileId ?? "", profile: booking.assignedProfile?.name ?? "Unassigned", notes: booking.notes ?? "" })), total, page, pageSize);
   }
 
   if (resource === "payments") {
@@ -345,7 +352,17 @@ app.post("/api/crm/:resource", asyncRoute(async (req, res) => {
     const parsed = clientSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "Check the client fields and try again." });
     const input = clean(parsed.data);
-    await db.client.create({ data: { fullName: input.fullName, phone: input.phone, email: input.email || null, nationality: input.nationality || null, passportNumber: input.passportNumber || null, notes: input.notes || null, assignedProfileId: profile.profileId, activityLogs: { create: { action: "CLIENT_CREATED", message: `Client ${input.fullName} was added.`, profileId: profile.profileId } } } });
+    if (input.companyId) {
+      const company = await db.company.findUnique({ where: { id: input.companyId } });
+      if (!company || (!profile.isAdmin && company.assignedProfileId !== profile.profileId)) return res.status(403).json({ error: "You can only assign clients to your agencies." });
+    }
+    await db.client.create({ data: { fullName: input.fullName, phone: input.phone, email: input.email || null, nationality: input.nationality || null, passportNumber: input.passportNumber || null, companyId: input.companyId || null, notes: input.notes || null, assignedProfileId: profile.profileId, activityLogs: { create: { action: "CLIENT_CREATED", message: `Client ${input.fullName} was added.`, profileId: profile.profileId } } } });
+  } else if (resource === "companies") {
+    const parsed = companySchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Check the agency fields and try again." });
+    const input = clean(parsed.data);
+    const company = await db.company.create({ data: { name: input.name, type: input.type, status: input.status, contactPerson: input.contactPerson || null, phone: input.phone || null, email: input.email || null, address: input.address || null, taxId: input.taxId || null, commissionPercent: input.commissionPercent, assignedProfileId: profile.isAdmin ? input.assignedProfileId || profile.profileId : profile.profileId, notes: input.notes || null } });
+    await db.activityLog.create({ data: { action: "COMPANY_CREATED", message: `Agency added: ${company.name}.`, profileId: profile.profileId, companyId: company.id } });
   } else if (resource === "packages") {
     if (!profile.isAdmin) return res.status(403).json({ error: "Only admin profiles can manage packages." });
     const parsed = packageSchema.safeParse(req.body);
@@ -370,7 +387,11 @@ app.post("/api/crm/:resource", asyncRoute(async (req, res) => {
     const packageItem = input.packageId ? await db.package.findUnique({ where: { id: input.packageId } }) : null;
     const client = await db.client.findUnique({ where: { id: input.clientId } });
     if (!client || (!profile.isAdmin && client.assignedProfileId !== profile.profileId)) return res.status(403).json({ error: "You can only create bookings for your assigned clients." });
-    await db.booking.create({ data: { bookingCode: `OB-${new Date().getFullYear()}-${String(count + 1).padStart(4, "0")}`, clientId: input.clientId, packageId: input.packageId || null, packageNameSnapshot: packageItem?.name ?? "Custom trip", travelDate: new Date(input.travelDate), travelers: input.travelers, totalPrice: total, paidAmount: paid, remainingAmount: Math.max(total - paid, 0), paymentStatus: paid <= 0 ? "UNPAID" : total - paid <= 0 ? "PAID" : "PARTIAL", bookingStatus: input.bookingStatus, assignedProfileId: profile.isAdmin ? input.assignedProfileId || profile.profileId : profile.profileId, notes: input.notes || null, activityLogs: { create: { action: "BOOKING_CREATED", message: `Booking created for ${packageItem?.name ?? "custom trip"}.`, profileId: profile.profileId } } } });
+    if (input.companyId) {
+      const company = await db.company.findUnique({ where: { id: input.companyId } });
+      if (!company || (!profile.isAdmin && company.assignedProfileId !== profile.profileId)) return res.status(403).json({ error: "You can only assign bookings to your agencies." });
+    }
+    await db.booking.create({ data: { bookingCode: `OB-${new Date().getFullYear()}-${String(count + 1).padStart(4, "0")}`, clientId: input.clientId, companyId: input.companyId || client.companyId || null, packageId: input.packageId || null, packageNameSnapshot: packageItem?.name ?? "Custom trip", travelDate: new Date(input.travelDate), travelers: input.travelers, totalPrice: total, paidAmount: paid, remainingAmount: Math.max(total - paid, 0), paymentStatus: paid <= 0 ? "UNPAID" : total - paid <= 0 ? "PAID" : "PARTIAL", bookingStatus: input.bookingStatus, assignedProfileId: profile.isAdmin ? input.assignedProfileId || profile.profileId : profile.profileId, notes: input.notes || null, activityLogs: { create: { action: "BOOKING_CREATED", message: `Booking created for ${packageItem?.name ?? "custom trip"}.`, profileId: profile.profileId } } } });
   } else if (resource === "payments") {
     const parsed = paymentSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "Check the payment fields and try again." });
@@ -396,7 +417,7 @@ app.get("/api/crm/:resource/:id", asyncRoute(async (req, res) => {
   const db = getPrisma();
   const resource = req.params.resource;
   const id = String(req.params.id);
-  const activityWhere = { OR: [{ leadId: id }, { clientId: id }, { bookingId: id }, { paymentId: id }, { taskId: id }] };
+  const activityWhere = { OR: [{ leadId: id }, { clientId: id }, { companyId: id }, { bookingId: id }, { paymentId: id }, { taskId: id }] };
 
   if (resource === "leads") {
     const lead = await db.lead.findUnique({ where: { id }, include: { assignedProfile: true, tasks: true, activityLogs: { include: { profile: true }, orderBy: { createdAt: "desc" }, take: 8 } } });
@@ -408,12 +429,21 @@ app.get("/api/crm/:resource/:id", asyncRoute(async (req, res) => {
   }
 
   if (resource === "clients") {
-    const client = await db.client.findUnique({ where: { id }, include: { assignedProfile: true, bookings: { include: { package: true } }, tasks: true, uploadedFiles: true, activityLogs: { include: { profile: true }, orderBy: { createdAt: "desc" }, take: 8 } } });
+    const client = await db.client.findUnique({ where: { id }, include: { assignedProfile: true, company: true, bookings: { include: { package: true } }, tasks: true, uploadedFiles: true, activityLogs: { include: { profile: true }, orderBy: { createdAt: "desc" }, take: 8 } } });
     if (!client) return res.status(404).json({ error: "Client not found." });
     if (!profile.isAdmin && client.assignedProfileId && client.assignedProfileId !== profile.profileId) return res.status(403).json({ error: "Forbidden" });
     return res.json({ title: client.fullName, subtitle: client.phone, status: client.assignedProfile?.name ?? "Unassigned", fields: [
-      ["Email", client.email || "-"], ["Nationality", client.nationality || "-"], ["Passport", client.passportNumber || "-"], ["Bookings", client.bookings.length], ["Paid", money(client.bookings.reduce((sum, booking) => sum + Number(booking.paidAmount), 0))], ["Remaining", money(client.bookings.reduce((sum, booking) => sum + Number(booking.remainingAmount), 0))], ["Notes", client.notes || "-"],
+      ["Email", client.email || "-"], ["Company / Agency", client.company?.name ?? "-"], ["Nationality", client.nationality || "-"], ["Passport", client.passportNumber || "-"], ["Bookings", client.bookings.length], ["Paid", money(client.bookings.reduce((sum, booking) => sum + Number(booking.paidAmount), 0))], ["Remaining", money(client.bookings.reduce((sum, booking) => sum + Number(booking.remainingAmount), 0))], ["Notes", client.notes || "-"],
     ], related: { bookings: client.bookings.map((booking) => ({ title: booking.bookingCode, meta: `${booking.package?.name ?? booking.packageNameSnapshot ?? "Custom trip"} - ${enumLabel(booking.bookingStatus)}` })), tasks: client.tasks.map((task) => ({ title: task.title, meta: `${enumLabel(task.status)} - ${shortDate(task.dueAt)}` })), files: client.uploadedFiles.map((file) => ({ title: file.fileName, meta: `${Math.round(file.fileSize / 1024)} KB` })) }, activity: client.activityLogs.map((item) => ({ message: item.message, profile: item.profile?.name ?? "-", date: shortDate(item.createdAt) })) });
+  }
+
+  if (resource === "companies") {
+    const company = await db.company.findUnique({ where: { id }, include: { assignedProfile: true, clients: true, bookings: { include: { client: true, package: true } }, activityLogs: { include: { profile: true }, orderBy: { createdAt: "desc" }, take: 8 } } });
+    if (!company) return res.status(404).json({ error: "Agency not found." });
+    if (!profile.isAdmin && company.assignedProfileId && company.assignedProfileId !== profile.profileId) return res.status(403).json({ error: "Forbidden" });
+    return res.json({ title: company.name, subtitle: company.contactPerson || company.phone || "Agency account", status: enumLabel(company.status), fields: [
+      ["Type", enumLabel(company.type)], ["Contact person", company.contactPerson || "-"], ["Phone", company.phone || "-"], ["Email", company.email || "-"], ["Address", company.address || "-"], ["Tax ID", company.taxId || "-"], ["Commission", company.commissionPercent == null ? "-" : `${company.commissionPercent}%`], ["Assigned profile", company.assignedProfile?.name ?? "Unassigned"], ["Notes", company.notes || "-"],
+    ], related: { clients: company.clients.map((client) => ({ title: client.fullName, meta: client.phone })), bookings: company.bookings.map((booking) => ({ title: booking.bookingCode, meta: `${booking.client.fullName} - ${booking.package?.name ?? booking.packageNameSnapshot ?? "Custom trip"}` })) }, activity: company.activityLogs.map((item) => ({ message: item.message, profile: item.profile?.name ?? "-", date: shortDate(item.createdAt) })) });
   }
 
   if (resource === "packages") {
@@ -425,11 +455,11 @@ app.get("/api/crm/:resource/:id", asyncRoute(async (req, res) => {
   }
 
   if (resource === "bookings") {
-    const booking = await db.booking.findUnique({ where: { id }, include: { client: true, package: true, assignedProfile: true, payments: true, tasks: true, uploadedFiles: true, activityLogs: { include: { profile: true }, orderBy: { createdAt: "desc" }, take: 8 } } });
+    const booking = await db.booking.findUnique({ where: { id }, include: { client: true, company: true, package: true, assignedProfile: true, payments: true, tasks: true, uploadedFiles: true, activityLogs: { include: { profile: true }, orderBy: { createdAt: "desc" }, take: 8 } } });
     if (!booking) return res.status(404).json({ error: "Booking not found." });
     if (!profile.isAdmin && booking.assignedProfileId && booking.assignedProfileId !== profile.profileId) return res.status(403).json({ error: "Forbidden" });
     return res.json({ title: booking.bookingCode, subtitle: booking.client.fullName, status: enumLabel(booking.bookingStatus), fields: [
-      ["Package", booking.package?.name ?? booking.packageNameSnapshot ?? "Custom trip"], ["Travel date", shortDate(booking.travelDate)], ["Travelers", booking.travelers], ["Total", money(booking.totalPrice.toString())], ["Paid", money(booking.paidAmount.toString())], ["Remaining", money(booking.remainingAmount.toString())], ["Payment status", enumLabel(booking.paymentStatus)], ["Assigned profile", booking.assignedProfile?.name ?? "Unassigned"], ["Notes", booking.notes || "-"],
+      ["Package", booking.package?.name ?? booking.packageNameSnapshot ?? "Custom trip"], ["Company / Agency", booking.company?.name ?? "-"], ["Travel date", shortDate(booking.travelDate)], ["Travelers", booking.travelers], ["Total", money(booking.totalPrice.toString())], ["Paid", money(booking.paidAmount.toString())], ["Remaining", money(booking.remainingAmount.toString())], ["Payment status", enumLabel(booking.paymentStatus)], ["Assigned profile", booking.assignedProfile?.name ?? "Unassigned"], ["Notes", booking.notes || "-"],
     ], related: { payments: booking.payments.map((payment) => ({ title: money(payment.amountPaid.toString()), meta: `${enumLabel(payment.paymentMethod)} - ${shortDate(payment.paymentDate)}` })), tasks: booking.tasks.map((task) => ({ title: task.title, meta: `${enumLabel(task.status)} - ${shortDate(task.dueAt)}` })), files: booking.uploadedFiles.map((file) => ({ title: file.fileName, meta: `${Math.round(file.fileSize / 1024)} KB` })) }, activity: booking.activityLogs.map((item) => ({ message: item.message, profile: item.profile?.name ?? "-", date: shortDate(item.createdAt) })) });
   }
 
@@ -497,6 +527,10 @@ app.patch("/api/crm/:resource/:id", asyncRoute(async (req, res) => {
     const existing = await db.client.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: "Client not found." });
     if (!profile.isAdmin && existing.assignedProfileId && existing.assignedProfileId !== profile.profileId) return res.status(403).json({ error: "Forbidden" });
+    if (input.companyId) {
+      const company = await db.company.findUnique({ where: { id: input.companyId } });
+      if (!company || (!profile.isAdmin && company.assignedProfileId !== profile.profileId)) return res.status(403).json({ error: "You can only assign clients to your agencies." });
+    }
     const client = await db.client.update({
       where: { id },
       data: {
@@ -505,10 +539,42 @@ app.patch("/api/crm/:resource/:id", asyncRoute(async (req, res) => {
         email: input.email || null,
         nationality: input.nationality || null,
         passportNumber: input.passportNumber || null,
+        companyId: input.companyId || null,
         notes: input.notes || null,
       },
     });
     await db.activityLog.create({ data: { action: "CLIENT_CREATED", message: `Client ${client.fullName} was edited.`, profileId: profile.profileId, clientId: client.id } });
+    return res.json({ ok: true });
+  }
+
+  if (resource === "companies") {
+    const parsed = companySchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Check the agency fields and try again." });
+    const input = clean(parsed.data);
+    const existing = await db.company.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: "Agency not found." });
+    if (!profile.isAdmin && existing.assignedProfileId && existing.assignedProfileId !== profile.profileId) return res.status(403).json({ error: "Forbidden" });
+    const company = await db.company.update({
+      where: { id },
+      data: { name: input.name, type: input.type, status: input.status, contactPerson: input.contactPerson || null, phone: input.phone || null, email: input.email || null, address: input.address || null, taxId: input.taxId || null, commissionPercent: input.commissionPercent, assignedProfileId: profile.isAdmin ? input.assignedProfileId || profile.profileId : profile.profileId, notes: input.notes || null },
+    });
+    await db.activityLog.create({ data: { action: "COMPANY_UPDATED", message: `Agency edited: ${company.name}.`, profileId: profile.profileId, companyId: company.id } });
+    return res.json({ ok: true });
+  }
+
+  if (resource === "companies") {
+    const company = await db.company.findUnique({ where: { id }, include: { clients: true, bookings: true } });
+    if (!company) return res.status(404).json({ error: "Agency not found." });
+    if (!profile.isAdmin && company.assignedProfileId && company.assignedProfileId !== profile.profileId) return res.status(403).json({ error: "Forbidden" });
+    if (company.clients.length || company.bookings.length) {
+      const archived = await db.company.update({ where: { id }, data: { status: "ARCHIVED" } });
+      await db.activityLog.create({ data: { action: "COMPANY_ARCHIVED", message: `Agency archived: ${archived.name}.`, profileId: profile.profileId, companyId: archived.id } });
+      return res.json({ ok: true, archived: true });
+    }
+    await db.$transaction([
+      db.activityLog.create({ data: { action: "COMPANY_ARCHIVED", message: `Agency deleted: ${company.name}.`, profileId: profile.profileId } }),
+      db.company.delete({ where: { id } }),
+    ]);
     return res.json({ ok: true });
   }
 
@@ -545,6 +611,10 @@ app.patch("/api/crm/:resource/:id", asyncRoute(async (req, res) => {
     const client = await db.client.findUnique({ where: { id: input.clientId } });
     if (!client) return res.status(404).json({ error: "Client not found." });
     if (!profile.isAdmin && client.assignedProfileId !== profile.profileId) return res.status(403).json({ error: "You can only use your assigned clients." });
+    if (input.companyId) {
+      const company = await db.company.findUnique({ where: { id: input.companyId } });
+      if (!company || (!profile.isAdmin && company.assignedProfileId !== profile.profileId)) return res.status(403).json({ error: "You can only assign bookings to your agencies." });
+    }
     const total = Number(input.totalPrice);
     const paid = Number(input.paidAmount ?? 0);
     const packageItem = input.packageId ? await db.package.findUnique({ where: { id: input.packageId } }) : null;
@@ -552,6 +622,7 @@ app.patch("/api/crm/:resource/:id", asyncRoute(async (req, res) => {
       where: { id },
       data: {
         clientId: input.clientId,
+        companyId: input.companyId || client.companyId || null,
         packageId: input.packageId || null,
         packageNameSnapshot: packageItem?.name ?? existing.packageNameSnapshot ?? "Custom trip",
         travelDate: new Date(input.travelDate),
@@ -706,7 +777,7 @@ app.delete("/api/crm/:resource/:id", asyncRoute(async (req, res) => {
   res.status(404).json({ error: "This resource cannot be deleted." });
 }));
 
-for (const resource of ["dashboard", "leads", "clients", "packages", "bookings", "payments", "tasks", "activity"] as const) {
+for (const resource of ["dashboard", "leads", "clients", "companies", "packages", "bookings", "payments", "tasks", "activity"] as const) {
   app.get(`/api/${resource}`, (req, res) => res.redirect(307, `/api/crm/${resource}${req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : ""}`));
   if (resource !== "dashboard" && resource !== "activity") {
     app.get(`/api/${resource}/:id`, (req, res) => res.redirect(307, `/api/crm/${resource}/${req.params.id}`));
@@ -753,6 +824,7 @@ app.get("/api/export/:type", asyncRoute(async (req, res) => {
   let rows: Record<string, unknown>[] = [];
   if (type === "leads") rows = (await db.lead.findMany({ include: { assignedProfile: true }, orderBy: { createdAt: "desc" } })).map((x) => ({ clientName: x.clientName, phone: x.phone, email: x.email, source: x.source, status: x.status, profile: x.assignedProfile?.name, createdAt: x.createdAt.toISOString() }));
   else if (type === "clients") rows = (await db.client.findMany({ include: { assignedProfile: true }, orderBy: { createdAt: "desc" } })).map((x) => ({ fullName: x.fullName, phone: x.phone, email: x.email, nationality: x.nationality, profile: x.assignedProfile?.name, createdAt: x.createdAt.toISOString() }));
+  else if (type === "companies") rows = (await db.company.findMany({ include: { assignedProfile: true }, orderBy: { createdAt: "desc" } })).map((x) => ({ name: x.name, type: x.type, status: x.status, contactPerson: x.contactPerson, phone: x.phone, email: x.email, commissionPercent: x.commissionPercent?.toString(), profile: x.assignedProfile?.name, createdAt: x.createdAt.toISOString() }));
   else if (type === "bookings") rows = (await db.booking.findMany({ include: { client: true, package: true, assignedProfile: true }, orderBy: { createdAt: "desc" } })).map((x) => ({ bookingCode: x.bookingCode, client: x.client.fullName, package: x.package?.name ?? x.packageNameSnapshot, totalPrice: x.totalPrice.toString(), paidAmount: x.paidAmount.toString(), remainingAmount: x.remainingAmount.toString(), bookingStatus: x.bookingStatus, paymentStatus: x.paymentStatus, profile: x.assignedProfile?.name }));
   else if (type === "payments") rows = (await db.payment.findMany({ include: { booking: true, recordedBy: true }, orderBy: { paymentDate: "desc" } })).map((x) => ({ bookingCode: x.booking.bookingCode, client: x.clientName, amount: x.amountPaid.toString(), method: x.paymentMethod, paymentDate: x.paymentDate.toISOString(), profile: x.recordedBy?.name }));
   else if (type === "reports") rows = [{ exportedAt: new Date().toISOString(), exportedBy: profile.profileName }];
