@@ -53,6 +53,10 @@ function sendCsv(res: express.Response, fileName: string, rows: Record<string, u
   res.send(csv);
 }
 
+function timelineDate(value: Date) {
+  return value.toISOString();
+}
+
 function generateOtp() {
   if (process.env.NODE_ENV !== "production" && process.env.USE_FIXED_DEV_OTP === "true" && process.env.DEV_OTP_CODE) {
     return process.env.DEV_OTP_CODE;
@@ -475,9 +479,17 @@ app.get("/api/crm/:resource/:id", asyncRoute(async (req, res) => {
     const booking = await db.booking.findUnique({ where: { id }, include: { client: true, company: true, package: true, assignedProfile: true, payments: true, tasks: true, uploadedFiles: true, activityLogs: { include: { profile: true }, orderBy: { createdAt: "desc" }, take: 8 } } });
     if (!booking) return res.status(404).json({ error: "Booking not found." });
     if (!profile.isAdmin && booking.assignedProfileId && booking.assignedProfileId !== profile.profileId) return res.status(403).json({ error: "Forbidden" });
+    const timeline = [
+      { type: "booking", title: "Booking created", meta: `${booking.package?.name ?? booking.packageNameSnapshot ?? "Custom trip"} for ${booking.client.fullName}`, date: timelineDate(booking.createdAt), tone: "blue" },
+      { type: "travel", title: "Travel date", meta: `${booking.travelers} traveler${booking.travelers === 1 ? "" : "s"} scheduled`, date: timelineDate(booking.travelDate), tone: "amber" },
+      ...booking.payments.map((payment) => ({ type: "payment", title: `Payment ${money(payment.amountPaid.toString())}`, meta: `${enumLabel(payment.paymentMethod)} - ${payment.notes || "Recorded payment"}`, date: timelineDate(payment.paymentDate), tone: "green" })),
+      ...booking.tasks.map((task) => ({ type: "task", title: task.title, meta: `${enumLabel(task.status)} - ${enumLabel(task.priority)} priority`, date: timelineDate(task.dueAt), tone: task.status === "DONE" ? "green" : task.status === "MISSED" ? "red" : "amber" })),
+      ...booking.uploadedFiles.map((file) => ({ type: "file", title: file.fileName, meta: `${Math.round(file.fileSize / 1024)} KB uploaded`, date: timelineDate(file.createdAt), tone: "gray" })),
+      ...booking.activityLogs.map((item) => ({ type: "activity", title: enumLabel(item.action), meta: `${item.message} - ${item.profile?.name ?? "-"}`, date: timelineDate(item.createdAt), tone: item.action.includes("CANCEL") ? "red" : "gray" })),
+    ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
     return res.json({ title: booking.bookingCode, subtitle: booking.client.fullName, status: enumLabel(booking.bookingStatus), fields: [
       ["Package", booking.package?.name ?? booking.packageNameSnapshot ?? "Custom trip"], ["Company / Agency", booking.company?.name ?? "-"], ["Travel date", shortDate(booking.travelDate)], ["Travelers", booking.travelers], ["Total", money(booking.totalPrice.toString())], ["Paid", money(booking.paidAmount.toString())], ["Remaining", money(booking.remainingAmount.toString())], ["Payment status", enumLabel(booking.paymentStatus)], ["Assigned profile", booking.assignedProfile?.name ?? "Unassigned"], ["Notes", booking.notes || "-"],
-    ], related: { payments: booking.payments.map((payment) => ({ title: money(payment.amountPaid.toString()), meta: `${enumLabel(payment.paymentMethod)} - ${shortDate(payment.paymentDate)}` })), tasks: booking.tasks.map((task) => ({ title: task.title, meta: `${enumLabel(task.status)} - ${shortDate(task.dueAt)}` })), files: booking.uploadedFiles.map((file) => ({ title: file.fileName, meta: `${Math.round(file.fileSize / 1024)} KB` })) }, activity: booking.activityLogs.map((item) => ({ message: item.message, profile: item.profile?.name ?? "-", date: shortDate(item.createdAt) })) });
+    ], related: { payments: booking.payments.map((payment) => ({ title: money(payment.amountPaid.toString()), meta: `${enumLabel(payment.paymentMethod)} - ${shortDate(payment.paymentDate)}` })), tasks: booking.tasks.map((task) => ({ title: task.title, meta: `${enumLabel(task.status)} - ${shortDate(task.dueAt)}` })), files: booking.uploadedFiles.map((file) => ({ title: file.fileName, meta: `${Math.round(file.fileSize / 1024)} KB` })) }, timeline: timeline.map((item) => ({ ...item, date: shortDate(new Date(item.date)) })), activity: booking.activityLogs.map((item) => ({ message: item.message, profile: item.profile?.name ?? "-", date: shortDate(item.createdAt) })) });
   }
 
   if (resource === "payments") {

@@ -30,6 +30,7 @@ type DetailResponse = {
   status: string;
   fields: [string, string | number][];
   related: Record<string, { title: string; meta: string }[]>;
+  timeline?: { type: string; title: string; meta: string; date: string; tone: string }[];
   activity: { message: string; profile: string; date: string }[];
 };
 
@@ -615,6 +616,10 @@ function DetailPage({ resource }: { resource: string }) {
           {data.activity.length ? data.activity.map((item, index) => <div className="mini-row active" key={index}><b>{item.message}</b><span>{item.profile} - {item.date}</span></div>) : <p className="empty">No activity yet.</p>}
         </div>
       </section>
+      {data.timeline?.length ? <section className="card timeline-card">
+        <div className="card-header"><div className="card-title">Booking timeline</div></div>
+        <div className="timeline-list">{data.timeline.map((item, index) => <div className={`timeline-item ${item.tone}`} key={`${item.type}-${index}`}><div className="timeline-dot" /><div><div className="timeline-title"><b>{item.title}</b><span>{item.date}</span></div><p>{item.meta}</p></div></div>)}</div>
+      </section> : null}
       <section className="detail-related">
         {relatedEntries.map(([name, items]) => <div className="card detail-card" key={name}><div className="card-header"><div className="card-title">{titleCase(name)}</div></div>{items.map((item, index) => <div className="mini-row" key={index}><b>{item.title}</b><span>{item.meta}</span></div>)}</div>)}
       </section>
